@@ -1,0 +1,380 @@
+#
+# Shell Script Framework v1.0
+# 20170104_fgn
+#
+# This Makefile is used to build a script based on the Shell Script Framework 
+#
+
+#################################################################################
+
+# These variables define the script details and metadata
+SCRIPT_MTIME			=  $(shell date "+%Y-%b-%d, %T %Z")
+SCRIPT_INTERPRETER		:= /bin/sh
+SCRIPT_CMD_LIST			:= initca req selfsign sign view help
+SCRIPT_CMD_LIST			+= eap-tls tls ipsec email 
+SCRIPT_CMD_LIST			+= revoke crl
+SCRIPT_CMD_LIST			+= p12 key ext
+SCRIPT_MIN_ARGS			:= 1
+SCRIPT_NAME			:= pki
+SCRIPT_VERSION			:= 0.1a
+SCRIPT_MAINTAINER		:= Frank G. Neumann
+SCRIPT_SHORT_DESCRIPTION	:= PKI management utility 
+SCRIPT_BUGREPORT		:= $(SCRIPT_MAINTAINER) (email:fgn_develop@posteo.de)
+
+# The script's default synopsis is different when using commands
+ifeq ($(SCRIPT_CMD_LIST),)
+SCRIPT_SYNOPSIS			:= [options] <file>
+else
+SCRIPT_SYNOPSIS                 := <$(subst $(nul) $(nul),|,$(SCRIPT_CMD_LIST))> [options]
+endif
+
+# These variables are parsed into the man page (mainly the .TH macro)
+# see the demo man page ('make man') for details 
+MAN_TITLE 			:= $(shell echo $(SCRIPT_NAME) | tr [:lower:] [:upper:])
+MAN_TITLE_LOWER			:= $(shell echo $(MAN_TITLE) | tr [:upper:] [:lower:])
+MAN_SECTION			:= 1
+MAN_SOURCE			:= Demo man page 
+MAN_MANUAL			:= Shell Script Framework demo man page 
+MAN_AUTHOR			:= $(SCRIPT_MAINTAINER)
+
+# Default Copyright, license, et. al. taken from the Gnu Coding Standard
+# Used for both the man page and the version information in the script
+COPYRIGHT			:= Copyright (C) $(shell date +%Y) $(SCRIPT_MAINTAINER)
+LICENSE				:= License GPLv2: GNU GPL version 2
+LICENSE				+= <http://www.gnu.org/licenses/gpl-2.0.html>
+COPYING				:= This is free software: you are free to change and redistribute it.
+WARRANTY			:= There is NO WARRANTY, to the extent permitted by law.
+
+#################################################################################
+
+# The following variables are internal to the build process and
+# should not require modification
+
+# Toplevel directory, final "/" stripped off
+TOPLEVEL		:= $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+SHELL 			:= /bin/sh 
+
+# Name of the file that contains the actual script code 
+SCRIPT_CODE			:= $(TOPLEVEL)/$(SCRIPT_NAME).sh
+SCRIPT_USAGE			:= $(TOPLEVEL)/$(SCRIPT_NAME).usage
+
+# By default, the sfw_cli library is added to the script 
+# This list can be modified using the -a and -l switch with sfw_init
+SCRIPT_LIBS			= $(SFW_DEFAULT_LIB) $(SFW_LIB_DIR)/sfw_std.sh
+
+# Default name of the custom Makefile
+CUSTOM_MAKEFILE			:= $(TOPLEVEL)/Makefile.custom 
+
+# Diagnostic messages default format
+# [OK/FAIL] <Description of action (max. 22 characters)> (filename)
+# i.e. 		$(SUCCESS) "scan for errors" "input.c"
+# prints 	[ OK ] scan for errors       (input.c)
+SUCCESS			:= printf "[ OK ] %-22s(%s)\n"
+FAILURE			:= printf "[FAIL] %-22s(%s)\n"
+
+# Shell Script Framework subdirectories 
+SFW_DIR			:= $(TOPLEVEL)/sfw
+SFW_LIB_DIR		:= $(SFW_DIR)/lib
+SFW_MAN_DIR		:= $(SFW_DIR)/man
+SFW_MAKE_DIR		:= $(SFW_DIR)/make
+SFW_UTILS_DIR		:= $(SFW_DIR)/utils
+SFW_HEADER_DIR		:= $(SFW_DIR)/header
+
+# The sfw utilities (used by the sfw Makefile and sfw_init)
+PARSER			:= $(SFW_UTILS_DIR)/parser.awk
+RUN_PARSER             	:= awk -f $(PARSER)
+
+# The Shell Script Framework files
+SFW_HEADER_FILE		:= $(SFW_HEADER_DIR)/sfw_header.sh
+SFW_DEFAULT_LIB		:= $(SFW_LIB_DIR)/sfw_cli.sh
+
+#################################################################################
+
+# Default target (just a placeholder)
+$(SCRIPT_NAME) : 
+
+#################################################################################
+
+# If the script code is a concatenation of various source files, a custom
+# Makefile is required. This Makefile is then responsible for producing
+# $(SCRIPT_CODE)
+
+ifneq ($(wildcard $(CUSTOM_MAKEFILE)),)
+$(SCRIPT_CODE) : $(CUSTOM_MAKEFILE)
+	@$(MAKE) TOPLEVEL='$(TOPLEVEL)' SCRIPT_CODE='$(SCRIPT_CODE)' -sf $< $@
+
+.PHONY : custom_clean
+custom_clean : $(CUSTOM_MAKEFILE)
+	@$(MAKE) TOPLEVEL='$(TOPLEVEL)' SCRIPT_CODE='$(SCRIPT_CODE)' -sf $< clean
+
+clean : custom_clean
+endif
+
+#################################################################################
+
+# Man page header, footer and demo page
+MAN_PAGE_HEADER		:= 	$(SFW_MAN_DIR)/man_page.header
+MAN_PAGE_DEMO		:=	$(SFW_MAN_DIR)/man_page.demo
+MAN_PAGE_FOOTER		:= 	$(SFW_MAN_DIR)/man_page.footer
+
+# Man pages are gzipped by default. Make sure to check the below
+# rule for man page creation when changing the compression method 
+COMPRESS_CMD		:= 	gzip -c
+COMPRESS_SUFFIX		:= 	gz
+
+# We expect man pages to be in the toplevel directory
+# Change this if you want to store them in a different place
+MAN_PAGE_SOURCES	:=	$(wildcard $(TOPLEVEL)/*.[12345678])
+
+# We have to strip directory parts as otherwise the target-specific rules
+# won't match / would have to be extended. We want to keep things simple.
+MAN_PAGE_SOURCES        :=      $(foreach MPS,$(MAN_PAGE_SOURCES),$(notdir $(MPS)))
+
+# If no man page sources were found, we build the demo man page.
+# The below conditional makes sure that prerequisites are adjusted
+# so we can still use the generic man page creation rule
+ifeq ($(MAN_PAGE_SOURCES),)
+MAN_PAGES		:=	$(SCRIPT_NAME).1.$(COMPRESS_SUFFIX)
+MAN_DATE		=	2017-01-06	
+$(MAN_PAGES) : $(MAN_PAGE_HEADER) $(MAN_PAGE_DEMO) $(MAN_PAGE_FOOTER)
+else
+MAN_PAGES		:=	$(addsuffix .$(COMPRESS_SUFFIX),$(MAN_PAGE_SOURCES))
+MAN_DATE		=	$(firstword $(shell stat -c%y $*))
+$(MAN_PAGES) : %.$(COMPRESS_SUFFIX) :	$(MAN_PAGE_HEADER) % $(MAN_PAGE_FOOTER) 
+endif
+
+# One rule to build them all (man pages, that is)
+$(MAN_PAGES) : 
+	@cat $^ | $(EXPORT) MAN_DATE="$(MAN_DATE)" $(RUN_PARSER) | $(COMPRESS_CMD) > $@ && \
+	$(SUCCESS) "man page built" "$@" || \
+	$(FAILURE) "man page not built" "$@"
+
+# The target specific variables for the man page pattern rule per default
+# use the globally set variables for the script.
+#
+# For this to work, EXPORT must be a recursively expanded variable.
+%.$(COMPRESS_SUFFIX) : EXPORT =  MAN_TITLE='$(MAN_TITLE)'
+%.$(COMPRESS_SUFFIX) : EXPORT += MAN_AUTHOR='$(MAN_AUTHOR)'
+%.$(COMPRESS_SUFFIX) : EXPORT += MAN_MANUAL='$(MAN_MANUAL)'
+%.$(COMPRESS_SUFFIX) : EXPORT += MAN_SECTION='$(MAN_SECTION)'
+%.$(COMPRESS_SUFFIX) : EXPORT += MAN_SOURCE='$(MAN_SOURCE)'
+%.$(COMPRESS_SUFFIX) : EXPORT += SCRIPT_NAME='$(SCRIPT_NAME)'
+%.$(COMPRESS_SUFFIX) : EXPORT += SCRIPT_SHORT_DESCRIPTION='$(SCRIPT_SHORT_DESCRIPTION)'
+%.$(COMPRESS_SUFFIX) : EXPORT += COPYING='$(COPYING)'
+%.$(COMPRESS_SUFFIX) : EXPORT += LICENSE='$(LICENSE)'
+%.$(COMPRESS_SUFFIX) : EXPORT += WARRANTY='$(WARRANTY)'
+
+# When creating custom man pages, make sure to override the above variables
+# with target-specific values matching the individual man page, e.g.:
+#
+# my_page.1.$(COMPRESS_SUFFIX) : MAN_TITLE			:= different title
+# my_page.1.$(COMPRESS_SUFFIX) : MAN_SECTION			:= different section
+# my_page.1.$(COMPRESS_SUFFIX) : MAN_SOURCE			:= maybe different source, too 
+# my_page.1.$(COMPRESS_SUFFIX) : SCRIPT_NAME			:= and so on  
+# my_page.1.$(COMPRESS_SUFFIX) : SCRIPT_SHORT_DESCRIPTION	:= and so on 
+#
+# See the demo man page which will be built by default when running 'make man'
+# for detailed information.
+
+#################################################################################
+
+# These variables are exported to the $(RUN_PARSER) command only
+
+$(SCRIPT_NAME) : EXPORT	:=SCRIPT_MTIME='$(SCRIPT_MTIME)'
+$(SCRIPT_NAME) : EXPORT +=SCRIPT_INTERPRETER='$(SCRIPT_INTERPRETER)'
+$(SCRIPT_NAME) : EXPORT +=SCRIPT_BUGREPORT='$(SCRIPT_BUGREPORT)'
+$(SCRIPT_NAME) : EXPORT +=SCRIPT_CMD_LIST='$(SCRIPT_CMD_LIST)'
+$(SCRIPT_NAME) : EXPORT +=SCRIPT_MIN_ARGS='$(SCRIPT_MIN_ARGS)'
+$(SCRIPT_NAME) : EXPORT +=SCRIPT_NAME='$(SCRIPT_NAME)'
+$(SCRIPT_NAME) : EXPORT +=SCRIPT_VERSION='$(SCRIPT_VERSION)'
+$(SCRIPT_NAME) : EXPORT +=SCRIPT_MAINTAINER='$(SCRIPT_MAINTAINER)'
+$(SCRIPT_NAME) : EXPORT +=SCRIPT_SYNOPSIS='$(SCRIPT_SYNOPSIS)'
+$(SCRIPT_NAME) : EXPORT +=SCRIPT_SHORT_DESCRIPTION='$(SCRIPT_SHORT_DESCRIPTION)'
+$(SCRIPT_NAME) : EXPORT +=MAN_SECTION='$(MAN_SECTION)'
+$(SCRIPT_NAME) : EXPORT +=MAN_TITLE_LOWER='$(MAN_TITLE_LOWER)'
+$(SCRIPT_NAME) : EXPORT +=COPYRIGHT='$(COPYRIGHT)'
+$(SCRIPT_NAME) : EXPORT +=LICENSE='$(LICENSE)'
+$(SCRIPT_NAME) : EXPORT +=COPYING='$(COPYING)'
+$(SCRIPT_NAME) : EXPORT +=WARRANTY='$(WARRANTY)'
+
+# Create the executable script 
+# The Makefile is included as a prerequisite so that changes to the Makefile
+# cause the script being rebuilt
+
+$(SCRIPT_NAME) : $(SFW_HEADER_FILE) \
+	      $(SCRIPT_LIBS) \
+	      $(SCRIPT_CODE) \
+	      $(SCRIPT_USAGE) \
+	      Makefile
+	@cat $< | \
+	sed -e '/_usage_text_replaced_by_sed/{r $(SCRIPT_USAGE)' -e 'd}' | \
+	$(EXPORT) $(RUN_PARSER) | \
+	cat - $(SCRIPT_LIBS) $(SCRIPT_CODE) > $@
+	@chmod +x $@
+	@$(SUCCESS) "script built" "$@"
+
+# Man pages will only be built if explicitly asked for, because man pages
+# for scripts are likely to be an exception
+
+.PHONY : all man
+man : Makefile $(MAN_PAGES) 
+all : $(SCRIPT_NAME) $(MAN_PAGES)
+
+# Create a compressed executable. This is mainly useful if your script
+# is bloated with textual data like template config files etc.
+# The script is two lines of code + a tar ball payload. The script extracts
+# the payload and runs it through the "eval" command like one big command.
+#
+# TODO: the eval command can fail if certain limitations (maximum number of
+# command line arguments, maximum size of command line, et al.) are met
+# What do we do THEN ? Simple error message ? There does not seem to be a 
+# simple way (apart from getconf) to reliably check before execution and
+# using getconf introduces a dependency (and I do not know whether getconf
+# is something to "expect" on a linux system) 
+compressed : $(SCRIPT_NAME)
+	@if [ "$$(head -n 3 $< | tail -n 1 | cut -b 1,2,3)" = "BZh" ]; then \
+	   $(FAILURE) "already compressed" "$<"; \
+         else \
+	   { tar -cjf $@_payload $<; \
+	   echo "#!/bin/sh" > $<; \
+           echo 'eval "$$(tail -n +3 $$0 | tar -xj --to-stdout)"' >> $<; \
+	   cat $@_payload >> $<; \
+	   rm -f $@_payload; \
+	   $(SUCCESS) "compressed" "$<"; } \
+         fi
+
+#################################################################################
+
+# Install specific settings
+INSTALL 			:= /usr/bin/install
+INSTALL_DATA_CMD		:= $(INSTALL) -m 664  
+INSTALL_BIN_CMD			:= $(INSTALL) -D -m 0755 -g bin
+INSTALL_MAN_CMD			:= $(INSTALL) -D -m 0644 -g man
+INSTALL_LIB_CMD			:= $(INSTALL) -D -m 0644 
+DEFAULT_INSTALL_PREFIX		:= /usr/local
+INSTALL_PATH_FILE		:= .install_path
+
+# If DESTDIR has been defined, sanitize it
+# Append a "/" to DESTDIR here, so we're safe when concatenating
+# DESTDIR and PREFIX and things also work when DESTDIR is unset.
+ifneq ($(strip $(DESTDIR)),)
+override DESTDIR		:= $(strip $(DESTDIR))/
+endif
+
+# If PREFIX has been defined, sanitize it. Set default otherwise.
+ifneq ($(strip $(PREFIX)),)
+override PREFIX			:= $(strip $(PREFIX))
+else
+PREFIX				:= $(DEFAULT_INSTALL_PREFIX)
+endif
+
+# Install locations
+INSTALL_PATH			:= $(realpath $(DESTDIR)/$(PREFIX))
+INSTALL_BIN_DIR			:= $(INSTALL_PATH)/bin
+#INSTALL_BIN_DIR		:= $(INSTALL_PATH)/sbin
+INSTALL_MAN_DIR			:= $(INSTALL_PATH)/share/man
+INSTALL_LIB_DIR			:= $(INSTALL_PATH)/lib
+
+# The install path is saved for uninstalling. 
+.PHONY : $(INSTALL_PATH_FILE) 
+$(INSTALL_PATH_FILE) : 
+	@echo $(INSTALL_PATH) > $@
+
+# Install and uninstall the man page(s)
+.PHONY : install-man uninstall-man
+install-man : $(MAN_PAGES) $(INSTALL_PATH_FILE)
+install-man uninstall-man :
+	@for man in $(MAN_PAGES); do \
+	  basename=$${man%.gz} ; section=$${basename#*.} ; \
+	  man_install_path=$(INSTALL_MAN_DIR)/man$${section}/$$man ; \
+	  if [ "$@" = "install-man" ]; then \
+	    if $(INSTALL_MAN_CMD) $$man $$man_install_path; then \
+	      $(SUCCESS) "installed" "$$man_install_path"; \
+            else \
+	      $(FAILURE) "not installed" "$$man_install_path"; \
+	    fi; \
+          else \
+	    if [ -e $$man_install_path ]; then \
+	      rm -f $$man_install_path && \
+	      $(SUCCESS) "uninstalled" "$$man_install_path" || \
+	      $(FAILURE) "uninstalled" "$$man_install_path"; \
+	    else \
+	      $(FAILURE) "not installed" "$$man_install_path"; \
+            fi; \
+          fi; \
+        done
+
+# Install libraries, this target has to be called explicitly
+.PHONY : install-lib uninstall-lib
+install-lib uninstall-lib : 
+	@$(FAILURE)  "not implemented yet" "target $@"
+
+# Install the executable script
+.PHONY : install
+install : $(SCRIPT_NAME) $(INSTALL_PATH_FILE) 
+	@$(INSTALL_BIN_CMD) $< $(INSTALL_BIN_DIR)/$< && \
+	$(SUCCESS) "installed" "$(INSTALL_BIN_DIR)/$<" || \
+	$(FAILURE) "error during install" "$(INSTALL_BIN_DIR)/$<"
+
+# Uninstall the script
+.PHONY : uninstall
+uninstall : 
+	@if [ -e $(INSTALL_PATH_FILE) ]; then \
+	  uninstall_path="$$(< $(INSTALL_PATH_FILE))"; \
+	  uninstall_file="$$uninstall_path/$(SCRIPT_NAME)" ;\
+	  if [ -e "$$uninstall_file" ]; then \
+	    rm -f "$$uninstall_file" && \
+	    $(SUCCESS) "uninstalled" "$$uninstall_file" || \
+	    $(FAILURE) "not uninstalled" "$$uninstall_file"; \
+          else \
+            $(FAILURE) "not found" "$$uninstall_file" ; \
+	  fi; \
+	else \
+ 	  $(FAILURE) "cannot uninstall" $(SCRIPT_NAME); \
+        fi
+
+# Convenience targets
+.PHONY : install-all uninstall-all
+install-all : install install-man install-lib
+uninstall-all : uninstall uninstall-man uninstall-lib
+
+#################################################################################
+
+# Clean up the directory
+# We also clean up files that might be left over from an update
+# process, i.e. Makefile.old and Makefile.changes
+.PHONY : clean
+clean : 
+	@rm -f $(SCRIPT_NAME) $(MAN_PAGES) $(MAN_PAGE_RULES)
+	@rm -f "Makefile.old" "$(SFW_MAKE_DIR)/Makefile.old.in" "$(SFW_MAKE_DIR)/Makefile.changes"
+	@$(SUCCESS) "cleaned" "$(SCRIPT_NAME)"
+
+#################################################################################
+
+# Print information on available make targets
+TARGET	:= @printf "%-16s%s\n"
+.PHONY : help
+help : 
+	@echo "Shell Script Framework v1.0 Makefile"
+	@echo "Usage: make [target]" 
+	@echo
+	@echo "--- Build targets"
+	$(TARGET) "$(SCRIPT_NAME)" 	"build script <$(SCRIPT_NAME)> (DEFAULT TARGET)"
+	$(TARGET) "compressed"		"Create a bz2-compressed, executable script"
+	$(TARGET) "man"	     	   	"Build man page(s): <$(MAN_PAGES)>"
+	$(TARGET) "all"	     		"Build script and man page(s)"
+	$(TARGET) "clean"	     	"Reset the build directory"
+	@echo
+	@echo "--- Install targets"
+	$(TARGET) "install"	     	"Install script to $(INSTALL_BIN_DIR)"
+	$(TARGET) "install-man"	 	"Install man page(s)"	
+	$(TARGET) "install-lib"		"Install libraries"
+	$(TARGET) "install-all"		"Install script, man page(s) and libraries"
+	@echo
+	@echo "--- Uninstall targets"
+	$(TARGET) "uninstall"		"Uninstall script"
+	$(TARGET) "uninstall-man"	"Uninstall man page(s)"
+	$(TARGET) "uninstall-lib"	"Uninstall libraries"
+	$(TARGET) "install-all"		"Uninstall script, man page(s) and libraries"
+	@echo	
+	@echo 'If you run "make" without specifying a target, the default target will be built.'

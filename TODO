@@ -1,0 +1,14 @@
+20160405_fgn
+
+1) Do we need a directory structure that reflects the CA hierarchy ?
+   Like when displaying certificates in a browser, where you see
+   everything in a top-down manner from Root CA to End-User-Cert ?
+   Or does this not make sense as any CA can sign any request (technically) ?
+
+   Which is the ideal directory structure to work with the pki tool ?
+
+2) Config files are not relocatable. So moving or renaming a CA directory
+   fucks it all up. Workarounds ? Solutions ?
+
+3) Extensions when signing certificates. Easy way to view extensions from
+   the config file ? e.g. pki show -e <config file>

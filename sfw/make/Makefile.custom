@@ -1,0 +1,25 @@
+# 20160127_fgn
+#
+# Shell Script Framework v1.0
+#
+# Supplementary Makefile for easy customization of the build process if
+# a seperate build process is required for the script code 
+# (e.g. because the script code is split up into several files)
+#
+# This Makefile is included from the toplevel Makefile automatically
+# when present in the toplevel directory.
+#
+# The toplevel Makefile exports the SCRIPT_CODE variable when calling
+# this Makefile
+#
+# The below rules are meant as an example
+
+$(SCRIPT_CODE) : 
+	@echo "*** Add a rule into <$(lastword $(MAKEFILE_LIST))> \
+	to customize your build process for <$@>"
+
+clean : 
+	@echo "Target CLEAN of custom Makefile"
+	@echo "e.g.: rm -f $(SCRIPT_CODE)"
+
+# End of Makefile.custom

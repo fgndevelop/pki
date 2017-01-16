@@ -1,0 +1,9 @@
+\. Shell Script Framework v1.0 man page header
+\. Variables provided to the .TH function are put into "" 
+\. as they may contain multiple words
+\.
+.TH "@MAN_TITLE@" "@MAN_SECTION@" "@MAN_DATE@" "@MAN_SOURCE@" "@MAN_MANUAL@"
+
+.SH NAME
+@SCRIPT_NAME@ - @SCRIPT_SHORT_DESCRIPTION@ 
+.

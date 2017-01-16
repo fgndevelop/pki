@@ -1,0 +1,51 @@
+# 20160112_fgn
+#
+# The pki script is divided into several source files and config data
+
+# Config files that are inserted into the main script
+CONFIG_DIR		:=	$(TOPLEVEL)/conf
+CA_CONFIG		:=	$(CONFIG_DIR)/ca
+REQ_CONFIG		:=	$(CONFIG_DIR)/req
+CONFIG_FILES		:=	$(wildcard $(CA_CONFIG)/*.conf) $(wildcard $(REQ_CONFIG)/*.conf)
+
+# CA config file templates
+ROOT_CA_CONFIG		:=	$(CA_CONFIG)/root-ca.conf
+INTERMEDIATE_CA_CONFIG	:=	$(CA_CONFIG)/intermediate-ca.conf
+SIGNING_CA_CONFIG	:=	$(CA_CONFIG)/signing-ca.conf
+
+# Request config file templates
+EAP_TLS_CONFIG 		:=	$(REQ_CONFIG)/eap_tls.conf
+TLS_IPSEC_CONFIG 	:=	$(REQ_CONFIG)/tls_ipsec.conf
+REQUEST_CONFIG 		:=	$(REQ_CONFIG)/request.conf
+
+# The source code 
+SOURCE_DIR		:=	$(TOPLEVEL)/source
+SCRIPT_SOURCE		:=	$(SOURCE_DIR)/config.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/req.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/view.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/selfsign.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/sign.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/tls_ipsec.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/eap_tls.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/initca.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/revoke.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/crl.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/genkey.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/p12.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/ext.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/help.sh
+SCRIPT_SOURCE		+=	$(SOURCE_DIR)/main.sh
+
+# Sed and cat form our script code
+$(SCRIPT_CODE) : $(SCRIPT_SOURCE) $(CONFIG_FILES)
+	cat $(SCRIPT_SOURCE) | \
+	sed -e "/@root_ca_config_file@/{r $(ROOT_CA_CONFIG)" -e ";d}" \
+	-e "/@signing_ca_config_file@/{r $(SIGNING_CA_CONFIG)" -e ";d}" \
+	-e "/@intermediate_ca_config_file@/{r $(INTERMEDIATE_CA_CONFIG)" -e ";d}" \
+	-e "/@request_config_file@/{r $(REQUEST_CONFIG)" -e ";d}" \
+	-e "/@tls_ipsec_request_config_file@/{r $(TLS_IPSEC_CONFIG)" -e ";d}" \
+	-e "/@eap_tls_request_config_file@/{r $(EAP_TLS_CONFIG)" -e ";d}" \
+	> $@
+
+clean : 
+	@rm -f $(SCRIPT_CODE)

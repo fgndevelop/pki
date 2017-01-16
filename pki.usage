@@ -1,0 +1,21 @@
+CA management commands:
+ initca			 Initialize a directory structure required for a certificate authority (ca)
+ req			 Create a certificate signing request (csr) from a config file
+ selfsign		 Selfsign a (root) CA's csr
+ sign			 Sign a csr
+ revoke			 Revoke a certificate
+ crl			 Generate a crl for a ca
+
+Certificate Request Configuration commands:
+ tls|ipsec		 Create a csr config file for a tls/ipsec certificate
+ eap-tls		 Create a csr config file for EAP-TLS certificates
+
+Other commands: 
+ key			 TODO: generate a key (rsa/ecc, prime etc)
+ p12			 Create a pkcs12 container (to export certificates) 
+ view			 View a csr, a certificate or a crl
+ help			 Get detailed help on the commands above
+ 
+Options:
+     --help		 display this help and exit
+ -V, --version  	 output version information and exit

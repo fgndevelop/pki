@@ -1,0 +1,179 @@
+\. Shell Script Framework v1.0
+\. Template man page body
+\.
+.SH SYNOPSIS
+.SY @SCRIPT_NAME@ 
+.OP \-abcegiklpstzCEGNRSUVXZ
+.OP \-d cs
+.OP \-f fam
+.OP \-F dir
+.OP \-I dir
+.OP \-K arg
+.OP \-L arg
+.OP \-m name
+.OP \-M dir
+.OP \-n num
+.OP \-o list
+.OP \-P arg
+.OP \-r cn
+.OP \-T dev
+.OP \-w name
+.OP \-W name
+.RI [ file
+.IR .\|.\|. ]
+.YS
+.
+.SH DESCRIPTION
+.PP
+This is the default man page for Shell Script Framework v1.0.
+It is automatically created when running 'make man' without
+providing a custom man page.
+Copy this demo to the script's toplevel directory, rename it
+into NAME.SECTION (e.g. <foo.1>) and run 'make man'
+See the
+.BR FILES
+section for further information on which files serve what
+purpose when creating man pages.
+.
+.SH OPTIONS
+.PP
+The options listed under
+.B SYNOPSIS
+do not match the options recognized by the sample script.
+They are meant as a template list when creating custom man pages.
+These options are recognized by framework-based scripts per default:
+.TP
+.B --help
+.br
+Display the usage help.
+Try this option with the sample script to receive more information
+on which options are actually recognized by the sample script and 
+on how to edit the usage information text.
+.TP
+.BR -V , " --version"
+.br
+Print version information
+.
+.SH ENVIRONMENT
+.PP
+There are no environment variables specific to the Shell Script Framework itself.
+So list here whatever environment variable your script evaluates. 
+.
+.SH "EXIT STATUS"
+This is what a list of return codes / exit codes / whatever you wanna call it could look like:
+.TP
+.B 0
+Success
+.TP
+.B 1
+Incorrect invocation or permissions
+.TP
+.B 2
+Yet another error condition
+.TP
+.B 4
+and so on and so on
+.
+.SH FILES
+.PP
+The following files in a Shell Script Framework directory are involved
+when creating a man page:
+.TP
+.B foo.[1..8] 
+Every file named <foo.[1..8]> in a Shell Script Framework directory is
+considered a man page source file.
+.TP
+.B Makefile
+When 'make man' or 'make all' is executed, a corresponding compressed man page named 
+<foo.[1..8].COMPRESSION_SUFFIX> will be created from each man page source file.
+The default compression method is gzip hence COMPRESSION_SUFFIX evaluates to <gz>
+Man pages are created by concatenating a header, the source file and a footer.
+.
+.TP
+.B sfw/man/man_page.header
+The header file serves as a generic templage for all man pages and is parsed
+by the Makefile before being prepended to the man page.
+The header file includes settings for the header, footer and 
+.B NAME
+section as demonstrated in this man page.
+The following variables from the Makefile will be substituted into the header:
+.P
+.PD 0
+\.RS
+.TP 4
+.B MAN_TITLE
+Will be printed left and right in the header line. Defaults to the capitalized script name.
+.TP
+.B MAN_SECTION
+The section your man pages belongs to. Displayed in parantheses to the right of MAN_TITLE. 
+Defaults to 1.
+.TP
+.B MAN_DATE
+The date is supposed to reflect the last non-trivial change to the man page.
+This is automatically set to the man page source file's modification time.
+Adjust this value if it does not make sense to you. 
+Displayed in the middle of the footer line.
+.TP
+.B MAN_SOURCE
+The source of this man page, e.g. the project this man page is a part of.
+Will be displayed in the left of the footer line.
+Quoting
+.BR man-pages (7):
+"In cases of doubt, just write Linux or GNU"
+.TP
+.B MAN_MANUAL
+The title of the manual, look above for an example.
+.TP
+.B SCRIPT_NAME
+This will be the first part in the
+.B NAME
+section of the man page.
+.br
+Defaults to the script name specified when running frwk-sh to create a Script
+Framework project.
+.TP
+.B SCRIPT_SHORT_DESCRIPTION
+A one-liner describing your script, will be printed in the name section of the man page.
+.br
+Seperated with a hypen from the script name.
+.RE
+.PD
+.
+.TP
+.B sfw/man/man_page.footer
+Man page footer, so far it only serves as antagonist to the header and makes sure
+that there is some whitespace between the last line of the man page source and the
+actual footer line.
+.
+.TP
+.B sfw/man/man_page.demo
+The default man page source file, you are currently looking at the resulting man page.
+Copy this file into the toplevel directory of your script, rename it into 
+<foo.1> and run 'make man' to create your first man page.
+.
+.SH COPYRIGHT
+.PP
+@LICENSE@
+.br
+@COPYING@
+.br
+@WARRANTY@
+.br
+.
+.SH "SEE ALSO"
+.PP
+Man page howto:
+.UR http://\:www.schweikhardt.net/\:man_page_howto.html
+.UE ,
+.br
+Linux man pages:
+.UR https://\:www.kernel.org/\:doc/man-pages
+.UE ,
+.br
+Wikipedia:
+.UR https://en.wikipedia.org/wiki/Man_page
+.UE ,
+.br
+.BR man-pages (7),
+.BR groff_man (7)
+.

@@ -1,0 +1,3314 @@
+#!/bin/sh
+#------------------------------------------------------>
+#
+# Name:	 	pki
+# Created:  	2017-Jan-14, 10:06:31 CET 
+# Man Page:     pki(1)
+#
+# Description:  PKI management utility 	
+# 
+# Powered by:	Shell Script Framework v1.0 
+#
+#<------------------------------------------------------
+#
+# Global variables used by the Shell Script Framework and it's functions.
+# In order to minimize namespace conflicts, variables as well as framework-internal
+# functions are prefixed with "_sfw_". This accounts for function's local variables,
+# too as they inherit variables local to the caller which is another possible source
+# of namespace conflicts. "_sfw_"-variables are not meant to be referenced directly
+# from the main script.
+#
+# Variables are mostly initialized by sfw_init or the Makefile
+#
+
+# Generic script information
+_sfw_script_name="pki"						
+_sfw_script_version="0.1a"				
+_sfw_synopsis="<initca|req|selfsign|sign|view|help|eap-tls|tls|ipsec|email||revoke|crl|p12|key|ext> [options]"				
+_sfw_man_section="1"
+_sfw_man_title="pki"
+
+# Copyright and license information, appended to the version information
+_sfw_copyright="Copyright (C) 2017 Frank G. Neumann"
+_sfw_license="License GPLv2: GNU GPL version 2 <http://www.gnu.org/licenses/gpl-2.0.html>"
+_sfw_copying="This is free software: you are free to change and redistribute it."
+_sfw_warranty="There is NO WARRANTY, to the extent permitted by law."
+
+# Variables used for command line argument handling
+_sfw_cmd_list="initca req selfsign sign view help eap-tls tls ipsec email  revoke crl p12 key ext"			# The script's cmdlist
+_sfw_min_args=1				# required number of arguments to the script
+_sfw_cmdline_arg_list=""				# Command line arguments, will be set at the end of header
+
+# User-defined cleanup hook that will be called on exit
+_sfw_user_exit_hook=""
+
+# Global variables for the user (i.e. script programmer)
+argc=$#							# Number of cmdline arguments
+
+# This is the generic sfw clean up function wich cleans up sfw changes
+# to the environment. This is not necessary when the script is executed
+# in a subshell, but a script might get sourced using ".", too.
+# If set, a user defined cleanup hook will be called, too.
+#
+# For more information regarding traps and signal propagation in shell scripts,
+# see this not exhaustive list: 
+# http://www.cons.org/cracauer/sigint.html
+# http://www.vidarholen.net/contents/blog/?p=34
+
+# https://www.gnu.org/software/autoconf/manual/autoconf-2.69/html_node/Signal-Handling.html
+# http://docstore.mik.ua/orelly/unix/ksh/ch08_04.htm
+
+# Clean up sfw changes to the environment
+_sfw_cleanup() 
+{
+  # Restore IFS
+  [ -z ${_sfw_old_ifs+x} ] && IFS=$_sfw_old_ifs
+
+  # call a user provided cleanup hook, if it is set
+  [ -n "${_sfw_user_exit_hook}" ] && eval "$_sfw_user_exit_hook"
+
+  # explicitly set return value to 0 as otherwise the return value 
+  # will be the result of the above comparison 
+  return 0
+}
+
+# This function can be called by the script to install a custom exit
+# hook since _sfw_cleanup just cleans up the mess we made ourselves
+
+set_exit_hook() 
+{
+  [ -z ${1+x} ] && debug "Missing argument to function call set_exit_hook()"
+  _sfw_user_exit_hook=$1
+  return 0
+}
+
+# A wrapper for the _sfw_internal_variable
+unset_exit_hook() { _sfw_user_cleanup_hook=""; return 0; }
+
+# SIGINT, SIGHUP and SIGTERM trap
+# This is not a perfectly clean solution as there may be case when a program
+# called by the script has a legitimate reason to receive SIGINT without 
+# actually exiting (e.g. emacs), yet those cases are rare.
+#
+# So all we do for now is calling the cleanup function and then removing
+# the trap to kill ourselves. The EXIT trap is removed because otherwise 
+# the cleanup function would be called twice. If this is not what you want
+# in your particular script, choose a different interrupt handler using 
+# set_interrupt 
+#
+# Signal propagation also enables the shell to set the return code according
+# to the signal received (e.g. on SIGINT, return code $? will be 130) 
+
+_sfw_interrupt_handler() 
+{
+  # Tell the user what happened
+  printf '\n%s: terminating script on SIG%s, cleaning up\n' "$_sfw_script_name" $1 >&2
+  _sfw_cleanup
+
+  # Unset the exit trap as all it does is to call _sfw_cleanup
+  # The user is not supposed to set it's own exit trap, rather
+  # use "set_cleanup_hook" to set up a hook for user-specific cleanup
+  trap - EXIT $1
+  kill -s $1 $$
+  return 0
+}
+
+set_interrupt() 
+{
+  local sig signals="INT TERM HUP"
+
+  # Set interrupt handler for all of the above signals
+  for sig in $signals; do
+    trap "${1-_sfw_interrupt_handler} $sig" $sig
+  done
+}
+
+#
+# Printing information and error messages in sfw scripts. These functions
+# are provided in order to unify output throughout the script whenever
+# runtime messages or errors have to be provided to the user.
+#
+
+# This function is meant for internal use only and does not check arguments.
+# ALL runtime output goes to stderr, so it can easily be suppressed / distinguished
+# from application output
+_sfw_print_msg () { printf "%s: %s\n" $_sfw_script_name "$*" >&2; }
+
+# Generic runtime information can be printed using this function. All it does
+# is to prepend the script's name to the given text
+# 
+# Usage:
+# runtime_msg <message>
+
+runtime_msg()
+{
+  # Argument check 
+  [ -z ${1+x} ] && debug "Missing argument to function call: runtime_error()"
+  
+  # Pretty message
+  _sfw_print_msg "$*" 
+}
+
+# Type of error: usage_error
+# The user made a mistake in the usage of the script, most of the time this
+# happens when fiddeling with command line arguments. Hence along with the
+# actual error message information on how to get further help is provided.
+# The error message is printed to stderr
+#
+# Usage:
+# usage_error <error message>
+
+usage_error()
+{	
+  # Argument check 
+  [ -z ${1+x} ] && debug "missing argument to function call: usage_error()"
+
+  # Print error message, give advice
+  _sfw_print_msg "$*" 
+  echo "Try '$_sfw_script_name --help' for more information." >&2
+  exit 1
+} 
+
+# Type of error: runtime_error
+# This function is for errors that occured outside of the script's
+# responsibility. Since it's not a syntactical error, no additional
+# information is displayed (main difference to usage_error)
+#
+# Usage:
+# runtime_error <error message>
+
+runtime_error()
+{
+  # Argument check 
+  [ -z ${1+x} ] && debug "Missing argument to function call: runtime_error()"
+
+  # Pretty error message
+  _sfw_print_msg "$*"
+} 
+
+# Output an internal error. The programmer made a mistake, so a
+# bug report help message is printed, too.
+#
+# Usage:
+# debug <message>
+
+debug ()
+{
+  # Now this really shouldn't happen 
+  [ -z ${1+x} ] && debug "Missing argument to function call: debug()"
+
+  # Print error and bug report message
+  _sfw_print_msg "$*"
+  _sfw_print_msg "Command line: $_sfw_cmdline_arg_list"
+  _sfw_print_msg "Report this bug to: Frank G. Neumann (email:fgn_develop@posteo.de)"
+  exit 1
+} 
+# Usage and version information are displayed if the user ask's for them.
+# Usage text and variable values are parsed into the executable script
+# automatically when running "make"
+#
+# "--help" and "--version / -V" are expected to work for all scripts. Period.
+# Since the getopts() library is not a requirement, we do not rely on it's
+# functionality and simple parse the command line ourselves.
+# Since these functions are either called during script initialization or 
+# not at all, they will be unset by the init code. 
+
+_sfw_help_version_check()
+{
+  local cmdline_arg
+
+  for cmdline_arg in "$@"; do 
+    case $cmdline_arg in
+ 
+      # Print usage text
+      --help)
+	cat << EOF_USAGE_TEXT
+Usage: $_sfw_script_name $_sfw_synopsis
+PKI management utility 
+
+CA management commands:
+ initca			 Initialize a directory structure required for a certificate authority (ca)
+ req			 Create a certificate signing request (csr) from a config file
+ selfsign		 Selfsign a (root) CA's csr
+ sign			 Sign a csr
+ revoke			 Revoke a certificate
+ crl			 Generate a crl for a ca
+
+Certificate Request Configuration commands:
+ tls|ipsec		 Create a csr config file for a tls/ipsec certificate
+ eap-tls		 Create a csr config file for EAP-TLS certificates
+
+Other commands: 
+ key			 TODO: generate a key (rsa/ecc, prime etc)
+ p12			 Create a pkcs12 container (to export certificates) 
+ view			 View a csr, a certificate or a crl
+ help			 Get detailed help on the commands above
+ 
+Options:
+     --help		 display this help and exit
+ -V, --version  	 output version information and exit
+
+For more details see ${_sfw_man_title}(${_sfw_man_section}).
+EOF_USAGE_TEXT
+	exit 0
+	;;
+
+      # Print version information
+      -V|--version)
+  	echo "$_sfw_script_name $_sfw_script_version (powered by Shell Script Framework v1.0)"
+  	echo "$_sfw_copyright"
+  	echo "$_sfw_license"
+  	echo "$_sfw_copying"
+  	echo "$_sfw_warranty"
+  	exit 0
+	;;
+    esac
+  done
+}
+
+# Generic functions that do not fit into one of the other categories
+# but are part of the basic sfw framework. This is NOT the place
+# for "nice to have" library functions 
+
+# This function uses eval magic to split up a list of items that possibly contain
+# whitespace. This function is required by argv() and also by the sfw_cli.sh library
+# for the nopt_argv() function, see sfw_cli.sh for details. It is not meant to be 
+# called directly as it does not do proper error checking 
+
+# See also:
+# http://www.linuxjournal.com/content/bash-preserving-whitespace-using-set-and-eval
+#
+# Usage: _sfw_get_arg_from_list <name of list> <N> <name of return variable>
+# Returns: 
+# 0 on success (with $return_variable = N-th argument)
+# 1 on failure
+
+
+# This function is meant to provide a single point of failure for both the
+# argv() function from the generic sfw header as well as for the nopt_argv()
+# function that is part of the sfw_cli.sh library
+# It is not meant to be called directly and simply provides a consistent 
+# argument check for both (argv and nopt_argv) use cases. 
+#
+# Usage _sfw_argv_wrapper <caller name> <arg list name> [arguments to the originating function call]
+_sfw_get_arg_from_list() 
+{
+  local _sfw_caller _sfw_arg_list _sfw_numeric_arg _sfw_var_name _sfw_nth_arg
+
+  # We only check rudimentarily for our "own" arguments and store them 
+  [ $# -lt 2 ] && debug "illegal number of arguments to function call: _sfw_arg_wrapper()"
+  _sfw_caller="$1"
+  eval _sfw_arg_list="\$${2}"
+
+  # We shift for easier reading. From now on we're dealing with the arguments
+  # that were provided to the CALLING function (remember, this is a wrapper)
+  # Hence we're performing argument checking on the caller's behalf
+  shift 2
+
+  # Now we check if the caller was called properly
+  [ -z ${1+x} ] && debug "missing argument to function call: ${_sfw_caller}()"
+
+  # Check if the argument is indeed numeric and if so, store it
+  case "$1" in
+    *[!0-9]*) debug "numeric argument to function call expected: ${_sfw_caller}()" ;;
+  esac
+
+  # Make sure N is >= 1 (this one is nasty, did YOU think of it ?)
+  [ $1 -ge 1 ] && _sfw_numeric_arg=$1 || _sfw_numeric_arg=1
+
+  # If there is another argument, the caller wants the result in a variable 
+  [ -z ${2:+x} ] || _sfw_var_name=$2
+
+  # Get the argument from the list using ev[ia]l magic
+  # We WANT parameter expansion here so we do NOT quote
+  eval set -- $_sfw_arg_list
+  
+  # If the numerical argument is out of range, we return right away
+  # Otherwise we now have the Nth argument from the list and "set" it
+  [ $_sfw_numeric_arg -le $# ] && eval set -- \$${_sfw_numeric_arg} || return 1
+
+  # Let's see how the caller wants the result returned
+  [ -z ${_sfw_var_name+x} ] && printf "%s\n" "$*" || eval $_sfw_var_name=\"$*\"
+
+  return 0
+}
+
+# This function is the user level interface to command line arguments 
+# It simply calls the sfw internal function _sfw_argv_wrapper, see above
+# Usage: argv <N> [variable name]
+# Returns:
+argv() { _sfw_get_arg_from_list argv _sfw_cmdline_arg_list $@ && return 0 || return 1; }
+
+# echo does, depending on the shell, support a couple of options
+# Hence a mere 'echo $var' will not always yield the result which
+# you might expect, try this with 
+#
+# var="-e -n value" ; echo $var
+# and / or read 
+# http://unix.stackexchange.com/questions/65803/why-is-printf-better-than-echo/65819#65819
+#
+# This is not an issue as long as you control the output / value of $var,
+# but if you are working with text from unknown sources / user input, it
+# might ruin your output. This simple echo replacement avoids that issue
+# in a portable manner.
+# 
+# Usage: echo TEXT
+echo() { printf '%s\n' "$*"; }
+# Strictly report errors and unset variables
+# This requires the following:
+#  
+# When working with positional parameters: 
+#  use ${1-} to avoid error messages when using positional parameters
+#
+# When dealing with variables:
+#  Use [ -z ${var+x} ] to check if a variable is set before using it
+#  The result is true, if the variable is unset, false otherwise
+#
+# see http://www.redsymbol.net/articles/unofficial-bash-strict-mode/
+# for details
+#
+# CAVE: pipefail
+# Since "pipefail" is not overly portable it is not set here.
+# Either set it yourself or see:
+# http://unix.stackexchange.com/questions/14270/get-exit-status-of-process-thats-piped-to-another
+
+set -o nounset
+set -o errexit
+
+# Make sure IFS is what we expect it to be.
+# (Unsetting IFS makes IFS default to ' \t\n' in many, but not all shells.
+# Do NOT use bashism here, see
+#  https://wiki.ubuntu.com/DashAsBinSh#I_am_a_developer._How_can_I_avoid_this_problem_in_future.3F
+_sfw_old_ifs=$IFS
+IFS=$(printf ' \t\n')
+
+# Set exit and interrupt traps
+trap _sfw_cleanup EXIT
+set_interrupt _sfw_interrupt_handler
+
+# Check whether "--help or -V/--version" is on the cmdline
+_sfw_help_version_check "$@"
+unset _sfw_help_version_check
+
+# Even if a script does not use commands, there might be a 
+# requirement for a certain number of arguments, e.g. a filename
+# Hence if a minimum number of arguments is defined (via the Makefile),
+# it will automatically be checked
+if [ -n "$_sfw_min_args" ]; then
+  [ $# -lt $_sfw_min_args ] && usage_error "missing command line argument"
+fi
+
+# For ease of development, the Makefile provides the variable SCRIPT_CMD_LIST 
+# All words in that variable are considered valid commands to the script
+# If a SCRIPT_CMD_LIST was provided, "cmd" is now set to the command provided
+# on the command line or we exit with error
+
+if [ -n "$_sfw_cmd_list" ]; then 
+
+  # No cmdline arguments => no valid command
+  [ -z ${1+x} ] && usage_error "missing command"
+
+  # Now scan the whole SCRIPT_CMD_LIST
+  for cmd in $_sfw_cmd_list; do
+    [ "$cmd" = "$1" ] && break
+  done
+
+  # To avoid setting a flag in the for-loop to indicate a valid command was found,
+  # we simply check the _sfw_cmd against $1 again to find out why the loop finished
+  [ "$cmd" = "$1" ] || usage_error "invalid command <$1>"
+
+  # Now remove the command from the cmdline and adjust relevant variables
+  shift 1
+  argc=$((argc-1))
+fi
+
+# Finally, save the command line arguments to an internal list so we can 
+# provide command line arguments anywhere in the script. Each argument is
+# quoted so that even whitespace containing arguments will be returned intact
+# See argv() for details
+
+for arg in "$@"; do 
+  _sfw_cmdline_arg_list="${_sfw_cmdline_arg_list:-} '${arg}'"
+done
+_sfw_cmdline_arg_list="${_sfw_cmdline_arg_list# }"
+unset arg
+
+
+#------------------------------------------------------>
+#
+# end of Shell Script Framework v1.0 header
+#  
+#<------------------------------------------------------
+
+#---------------------------------------------------------->
+#
+#  Shell Script Framework v0.1a library
+#
+#  sfw_cli.sh
+#
+#  Command line interface for sfw scripts
+#  See the Makefile on how to define values for _sfw_ variables
+#
+#<----------------------------------------------------------
+
+# Usage: getopts <optstring> <return variable> [arg]
+#
+# getopts() processes the arguments given with [arg] or, if there are no
+# arguments provided, processes the arguments on the command line.
+# OPTIND indicates the next argument that will be processed by getopts() 
+#
+# optstring:
+# All allowed short (i.e. single character) options are simply concatenated,
+# if an option requires an argument it is followed by a colon ":"
+# Long options are prefixed with a plus sign "+". If they require an 
+# argument, a colon has to be appended to the long option.
+# There is no "optional argument", but this is something the caller
+# can easily implement using the required argument ":" syntax (see Return Values)
+# In an optstring consisting of mixed short and long options, short options have
+# to come first.
+# Example: "aei:OU+long-opt+long-opt-with-required-arg:"
+# This optstring allows for the short options a, e, O, U and i which requires an argument.
+# Long options are "long-opt" and "long-opt-with-required-arg" which requires an argument.
+#
+# Short Options
+# Short options start with a single dash "-". Arguments to short options can either
+# be directly appended to the option as in "-Ieth0" (implicit argument) or can 
+# directly  follow the option as a seperate element on the command line as in 
+# "-I eth0" (explicit argument)
+# Short options can be concatenated into an option list, e.g.: "-aeOU"
+# If an option with a required argument is part of an option list, it has to 
+# be the last option in the list as otherwise all characters following the 
+# option are considered an implicit argument.
+# E.g: "-aeOUIeth0" or "-aeOUI eth0", NOT "-aIOUe eth0"
+# getopts() uses the global variable _sfw_optlistind to keep track of which
+# character in the option list should be processed next
+#
+# Long Options
+# Long options start with a double dash "--". Arguments to long options can either
+# be directly appended to the option using an equal sign "=" as in "--long-opt=file"
+# (implicit argument) or can directly follow the option as a seperate command line argument
+# as in "--long-opt file" (explicit argument).
+# Long options must not be concatenated.
+#
+# Return Values:
+#
+# 1 getopts() returns 1 if the argument indicated by OPTIND is NOT an option
+#   according to the optstring provided or if OPTIND is larger than the number
+#   of available options. The end of available options can be marked by the non-optional
+#   argument "--". In the absence of "--", all arguments provided to getopts / on the 
+#   command line are considered options.
+#
+# 0 In all other cases, getopts returns 0. If a valid option (according to "optstring")
+#   was found, <return variable> is set to the option character or option string respectively.
+#   If the option requires an argument and the argument is present, it will be placed into OPTARG.
+# 
+# 0 If an invalid option was found, <return variable> is set to "?" and the invalid
+#   option character or string will be placed into OPTARG.
+#
+# 0 If a valid option was found that requires an argument, but no argument (neither
+#   implicit nor explicit) was provided, then <return variable> will be set to ":" and the
+#   option name will be put into OPTARG. It is then up to the caller to decide whether
+#   this is an error or not - which is practically identical to an "optional argument"
+#
+# Unless the return value is 1, the OPTIND variable will be updated to point to the next
+# argument to be processed. 
+#
+# Error Reporting
+# This getopts() simply does not print any error messages, so unlike with bash or dash
+# getopts you do not need to prepend a ":" before your optstring to silence error reporting.
+# It is entirely up to the calling function to determine what is considered an error and 
+# how to act upon it.
+
+###############################################################################
+
+
+# These variables are global to make clear that they are used by all three
+# getopts() functions: getopts(), _sfw_is_valid_short() and _sfw_is_valid_long()
+
+_sfw_sh_opts=""
+_sfw_l_opts=""
+_sfw_optlistind=1
+_sfw_token=""
+_sfw_valid=""
+_sfw_option=""
+_sfw_possible_arg=""
+_sfw_arg_required=0
+
+###############################################################################
+
+# Validate a short option. This function is called by the getopts() function.
+# It checks if _sfw_token against the short options in _sfw_sh_opts
+#
+# Usage: _sfw_validate_short
+# Returns:
+# 0 = it is a valid short option (if it needs an argument, that is in OPTARG)
+# 1 = it is NOT a valid short option
+# 2 = it is a valid short option BUT a required argument was not found
+
+_sfw_validate_short() 
+{
+  local _sfw_trim_count _sfw_token_cutoff
+
+  # If _sfw_optlistind is larger than the number of characters in our option (list), 
+  # somebody miscounted and that's an error. We return "invalid short option" then
+  # as we don't know any better.
+  [ $_sfw_optlistind -gt ${#_sfw_token} ] && return 1 
+
+  # If _sfw_optlistind is greater than one, we are currently processing a short option
+  # list, so trim our option list down to the next character indicated by _sfw_optlistind 
+  if [ $_sfw_optlistind -gt 1 ]; then
+    # Remove the first character _sfw_optlistind-1 times
+    _sfw_trim_count=$((_sfw_optlistind-1))
+    while [ $_sfw_trim_count -gt 0 ]; do
+      _sfw_token=${_sfw_token#?}
+      _sfw_trim_count=$((_sfw_trim_count-1))
+    done
+  fi
+
+  # We update pointers now. Whether or not the option proves to be valid
+  # doesn't matter, we process it once and then move on to the next 
+  # _sfw_token might be a single character option with implicit argument,
+  # which we don't know now at this point and have to adjust later on 
+  if [ ${#_sfw_token} -gt 1 ]; then
+    _sfw_optlistind=$((_sfw_optlistind+1))
+  else
+    OPTIND=$((OPTIND+1))
+    _sfw_optlistind=1; 
+  fi
+
+  # Isolate the first character from our (possible) option character list 
+  # and remove it from the token. The rest of the token serves as implicit
+  # argument. In some shells combining # / % expansion in one expression is
+  # possible yet it has proven to not be portable (e.g. raspberry pi's dash won't do it)
+  # Hence the _sfw_cutoff variable had to be introduced
+  _sfw_token_cutoff="${_sfw_token#?}"
+  _sfw_option="${_sfw_token%${_sfw_token_cutoff}}"
+  _sfw_token=${_sfw_token#$_sfw_option}
+
+  # Now parse through the option string, character by character
+  while [ -n "$_sfw_sh_opts" ]; do 
+
+    # Get the next option character from our optstr and
+    # remove it from the optstring itself
+    _sfw_valid=${_sfw_sh_opts%${_sfw_sh_opts#?}}
+    _sfw_sh_opts=${_sfw_sh_opts#$_sfw_valid}
+
+    # Check if there's an argument indicator following in the optstring,
+    # we have to remove it anyway 
+    case "$_sfw_sh_opts" in
+      :*) _sfw_arg_required=1 ; _sfw_sh_opts=${_sfw_sh_opts#:} ;;
+      *)  _sfw_arg_required=0 ;;
+    esac
+
+    # If the character doesn*t match our valid character from the optstring,
+    # we're done here 
+    [ "$_sfw_option" = "$_sfw_valid" ] || continue
+
+    # If we don't need an argument, we have all we need in _sfw_option  
+    [ $_sfw_arg_required -eq 0 ] && return 0
+
+    # So we need an argument...
+    # Since the rest of the token is considered an implicit argument AND
+    # has precedence over possible explicit arguments, we overwrite 
+    # _sfw_possible_arg
+    [ -n "$_sfw_token" ] && _sfw_possible_arg="$_sfw_token"
+
+    # Now we only have to check against _sfw_possible_arg which was either
+    # empty and overwritten with the implicit argument, is still empty or
+    # was set to the explict arg from the very start 
+    # OPTIND has to be increased either because we had an explicit argument
+    # or because it was not increased when entering the function
+    if [ -n "$_sfw_possible_arg" ]; then
+      OPTARG="$_sfw_possible_arg"
+      OPTIND=$((OPTIND+1))
+      _sfw_optlistind=1
+      return 0
+    else
+      return 2
+    fi
+  done
+
+  # It's not a valid option
+  return 1 
+}
+
+###############################################################################
+
+# Usage: _sfw_validate_long optstring name [possible_arg]
+# Return values:
+# 0 = it is a valid long option (if it needs an argument, that is in OPTARG)
+# 1 = it is NOT a valid long option
+# 2 = it is a valid long option BUT a required argument was not found
+_sfw_validate_long() 
+{
+  # long options are easy - they cannot be concatenated, so we can safely
+  # update OPTIND right away 
+  OPTIND=$((OPTIND+1))
+
+  # We set _sfw_option here and adjust it if need be
+  _sfw_option="$_sfw_token"
+
+  # Long options are all seperated by "+" so this ev[ia]l magic serves
+  # as a basic syntax check, too - and saves us some variable definitions
+  eval IFS=\"+\" command eval set -- '\$_sfw_l_opts' 
+
+  # Now parse through the optstring
+  for _sfw_valid in "$@"; do 
+
+    # Check if an argument modifier is present and remove it from the option 
+    case "$_sfw_valid" in
+      *:) _sfw_arg_required=1
+          _sfw_valid=${_sfw_valid%:} ;;
+      *)  _sfw_arg_required=0 ;;
+    esac
+
+    # Check if the beginning of our token matches the valid option 
+    # If not, we can move right on to the next valid option 
+    [ "$_sfw_option" = "${_sfw_option#$_sfw_valid}" ] && continue
+
+    # Now it can be one of three things: 
+    # 1) an exact match with our long option
+    # 2) an exact match with an implicit argument appended using "="
+    # 3) anything else => garbage
+
+    # If there are trailing characters in our token, they are per definitionem
+    # the implicit argument to that option as concatenation is NOT allowed with
+    # long options ...
+    if [ -n "${_sfw_option#$_sfw_valid}" ]; then
+
+      # ... so if we DON'T need an argument, that makes it an invalid option
+      [ $_sfw_arg_required -eq 1 ] || return 1
+
+      # If it starts with "=", the argument to our option is syntactically correct
+      # and we can return. Otherwise, it's an invalid option
+      _sfw_possible_arg="${_sfw_option#$_sfw_valid}"
+      case "$_sfw_possible_arg" in
+        =*) 
+          OPTARG="${_sfw_possible_arg#=}"
+          _sfw_option="${_sfw_valid}"
+          return 0
+          ;;
+        *) return 1 ;;
+      esac
+
+    # No trailing characters, so we take it from here 
+    else
+      
+      # If no argument is required, then we're good !
+      [ $_sfw_arg_required -eq 0 ] && return 0
+       
+      # We need an argument, so if it's not there, return an error
+      [ -n "$_sfw_possible_arg" ] || return 2 
+
+      # Otherwise set OPTARG, OPTIND and return
+      OPTARG="$_sfw_possible_arg"
+      OPTIND=$((OPTIND+1))
+      return 0
+
+    fi
+  done
+
+  # No more options in optstr => it's not a valid option
+  # _sfw_option is set already, so all we need to do is to return an error
+  return 1 
+}
+
+###############################################################################
+
+# --- This is the main getopts() code ---
+
+# Usage:
+# getopts <optstring> <return variable> [arguments to parse]
+# Returns: 
+# 0 in most cases
+# 1 if blabla
+
+getopts() 
+{
+  local _sfw_optstring _sfw_last_arg _sfw_ret_value_var _sfw_ret_value
+
+  # Argument check
+  [ $# -lt 2 ] && debug "missing argument to function call getopts()"
+  _sfw_optstring="$1" _sfw_ret_var="$2"
+
+  # Roughly check the optstring, at least for whitespace 
+  case "$_sfw_optstring" in
+    *[[:blank:]]*) debug "illegal character in optstring <$_sfw_optstring>" ;;
+  esac
+
+  # clear OPTARG
+  OPTARG=""
+
+  # Split the optstring into short and long options
+  _sfw_l_opts="${_sfw_optstring#*+}"
+  if [ -n "${_sfw_l_opts}" ]; then
+    _sfw_l_opts="+${_sfw_l_opts}"
+    _sfw_sh_opts=${_sfw_optstring%${_sfw_l_opts}}
+  else  
+    _sfw_sh_opts="${_sfw_optstring}"
+  fi 
+
+  # If more arguments were provided, those are parsed - otherwise 
+  # _sfw_cmdline_arg_list (the script's command line arguments) will be parsed 
+  # If there's nothing to parse at all, we return an error
+  shift 2
+  if [ -z "$*" ]; then
+    eval set -- $_sfw_cmdline_arg_list
+    [ -z "$*" ] && return 1
+  fi
+
+  # We set <_sfw_ret_var> to "?" once, which is what  we return in case of error
+  # If anything like a valid option is found, it will be set properly
+  # If not, we have an error anyway and this way we save a few lines of code
+  eval "$_sfw_ret_var=\"?\""
+
+  # Determine the last argument, i.e. count the arguments before the argument 
+  # list delimiter (if there is one) 
+  _sfw_last_arg=0
+  for _sfw_token in "$@"; do
+    [ "$_sfw_token" = "--" ] && break
+    _sfw_last_arg=$((_sfw_last_arg+1))
+  done
+
+  # OPTIND is a shell variable and we neither initialized it nor do we
+  # know if someone else fiddled around with it. So we just make sure it is
+  # no less than 1 and no more than _$sfw_last_arg
+  # Otherwise we simply return 1 and the caller can find out what's wrong
+  [ $OPTIND -gt $_sfw_last_arg ] && return 1
+  [ $OPTIND -lt 1 ] && return 1
+
+  # Adjust the argument list, so we start with the argument pointed to by OPTIND 
+  # OPTIND is updated by is_valid_short and is_valid_long only, we do not touch
+  # it here. 
+  shift $((OPTIND-1))
+
+  # The (now) first positional parameter is our possible option.
+  _sfw_token="${1}"
+
+  # The following positional parameter is a possible argument to the first one
+  # if it is not empty and does not start with a "-", that is.
+  _sfw_possible_arg="${2-}"
+  [ "$_sfw_possible_arg" = "${_sfw_possible_arg#-}" ] || _sfw_possible_arg=""
+
+  # Determine if we have a long, a short or no option and call the
+  # appropriate validation function 
+  case "$_sfw_token" in  
+
+    # Check if it's a VALID long option
+    --*) _sfw_token=${_sfw_token#--}
+        _sfw_validate_long
+        _sfw_ret_value=$?
+        ;;
+
+    # Check if it's a valid SHORT option 
+    -*) _sfw_token=${_sfw_token#-}
+        _sfw_validate_short
+        _sfw_ret_value=$?
+        ;;
+ 
+    # It's neither nor, return an error
+     *) return 1
+        ;;
+  esac
+
+  # _sfw_option is set to the option (short or long) that was considered
+  # for validation and OPTARG is set (if required by the optstring)
+  case "$_sfw_ret_value" in 
+
+    # valid option: return _sfw_option
+    0) eval "$_sfw_ret_var=\"$_sfw_option\""
+       ;;
+         
+    # invalid option: return "?" + the invalid option in OPTARG
+    1) eval "$_sfw_ret_var=?" 
+       OPTARG="$_sfw_option"
+       ;;
+         
+    # valid option, missing argument: return ":" + option in OPTARG
+    2) eval "$_sfw_ret_var=:"
+       OPTARG="$_sfw_option"
+       ;;
+
+  esac
+  return 0
+}
+
+######################################################################
+
+# Convenience functions for consistent error messages.  
+# See the sample script for usage examples.
+
+invalid_option() { usage_error "invalid option -- '$OPTARG'"; }
+missing_argument() { usage_error "missing argument to option -- '$OPTARG'"; }
+more_than_once() { usage_error "option given more than once -- '$1'"; }
+
+######################################################################
+
+# These functions are complements to the getopts() functions.
+# Instead of dealing with all command line arguments though, they deal
+# with what is left behind after parsing the command line with getopts():
+# the non-optional arguments.
+# If your script is supposed to deal with more than one non-optional argument,
+# e.g. a list of filenames, these functions are quite useful. Since it takes
+# getopts() functionality to find out what is a non-optional argument on the
+# command line rather than an argument to an option, these functions are
+# included in this library.
+# See the sample script for a detailed example on how to use getopts() and
+# noptv() functions to provide a very robust command line for your script.
+
+# noptc, as opposed to argc, is the global counter for non-optional arguments
+# This variable should be considered read only (but that would be a bashism).
+# It will be updated by add_nopt()
+nopt_argc=0
+
+# This list is for internal use only. Elements should be added to this list
+# using add_nopt()
+_sfw_nopt_arg_list=""
+
+# Add a non-option argument to the _sfw_nopt_list. This function must be
+# called by the programmer as he's the only one to know what is an option,
+# an argument to an option and a non-option argument
+# It is best called during command line argument parsing, see the sfw
+# sample script for an example of the intended use
+#
+# Usage: is_nopt_arg <index>
+#
+
+is_nopt_arg()
+{
+  local _sfw_nopt_arg
+
+  # Argument check
+  [ -z ${1+x} ] && debug "missing argument to function call: is_nopt_arg()"
+
+  # Get the command line argument and add it to the list
+  if argv $1 _sfw_nopt_arg; then
+    _sfw_nopt_arg_list="${_sfw_nopt_arg_list:-} '$_sfw_nopt_arg'"
+    nopt_argc=$((nopt_argc+1))
+    return 0
+  else
+    return 1
+  fi 
+}
+
+# This function is the equivalent to argv() for non-optional arguments
+# It can only return arguments that have been added using add_nopt_arg()
+# Usage: nopt_argv [N] [variable name]
+# If N is not specified, it defaults to 1
+ # You have to specifiy the numeric argument
+nopt_argv() { _sfw_get_arg_from_list nopt_argv _sfw_nopt_arg_list $@ && return 0 || return 1; }
+
+# End of file sfw_cli.sh
+
+#---------------------------------------------------------->
+#
+#  Shell Script Framework v1.0 library
+#
+#  sfw_std.sh
+#
+#  Standard functionality
+#
+#<----------------------------------------------------------
+
+# Make sure a file is readable
+# Usage: is_readable FILENAME
+#
+# Returns: 
+# 0: file exists and is readable
+# 1: file does not exist
+# 2: file cannot be read
+
+is_readable()
+{
+  # Argument check
+  [ -z ${1+x} ] && debug "missing argument to function call: is_readable()"
+
+  # Perform the checks, return error values
+  [ -e "$1" ] || return 1
+  [ -r "$1" ] || return 2
+  return 0
+}
+
+# DEFINITELY: looking for contributors !
+# MAYBE: create a directory if it does not exist
+# MAYBE: create a file if it does not exist
+# MAYBE: check whether a specific program is installed and executable
+# MAYBE: check whether the program is being run with uid = root / sudo ?!?
+# These functions print template configuration files 
+# Note that shell expansion is suppressed for the HERE documents
+# since we make use of the openssl config variables syntax
+# When running make, the textual data is parsed into this file
+# using sed
+
+# Write a template root ca config file to stdout
+cat_root_conf() 
+{
+  cat << "EOF_ROOT_CA"
+# Root CA configuration file
+
+# see https://www.openssl.org/docs/manmaster/apps/config.html
+# for an overview of the openssl config format
+
+# The [default] section contains global constants that can be referred to from
+# the entire configuration file. It may also hold settings pertaining to more
+# than one openssl command.
+
+[ default ]
+ca_name                 = @CA_NAME@             	# CA name
+ca_dir                  = @CA_DIR@              	# Top dir
+default_ca              = $ca_name	               	# The default CA section
+ca_key			= $ca_dir/private/$ca_name.key
+RANDFILE               	= $ca_dir/mgmt/rnd		# Use RANDFILE
+base_url		= http://pki.@CA_NAME@.com	# Sample Base URL
+aia_url			= $base_url/$ca_name.cer	# Authority Information Access URL
+crl_url			= $base_url/$ca_name.crl	# Certificate Revocation List URL
+
+# The [req] section of the configuration file is used by the openssl req command.
+# It defines the CA's key pair, its DN, and the desired extensions for the CA
+# certificate.
+#
+# We do not request extensions for the root certificate. We're root,
+# so we just DEFINE extensions 
+[ req ]
+default_bits            = 4096                 	# RSA key size, see the "pki req" command 
+						# for different key types and sizes
+default_keyfile		= $ca_key		# CA's private key
+encrypt_key             = yes			# Encrypt private key
+default_md              = sha256		# see https://www.entrust.com/lp/sha-1-sha-2-faq/ 
+utf8                    = yes			# Input is UTF-8
+string_mask             = utf8only		# Emit UTF-8 strings
+prompt                  = no			# Don't prompt for DN
+distinguished_name      = dn			# DN section
+
+# Distinguished name
+# These fields seem to be the most common ones in root certificates
+[ dn ]
+countryName             = "@CA_NAME@ Country Name" 
+organizationName        = "@CA_NAME@ Organization"
+organizationalUnitName  = "@CA_NAME@ Root CA"
+commonName              = "@CA_NAME@ Common Name"
+
+# The remainder of the configuration file is used by the openssl ca command.
+# The CA section defines the locations of CA assets, as well as the policies
+# applying to the CA.
+
+[ @CA_NAME@ ]
+certificate             = $ca_dir/${ca_name}.crt		# The CA cert
+private_key             = $ca_key				# CA private key
+new_certs_dir           = $ca_dir/certs           		# Certificate archive
+serial                  = $ca_dir/mgmt/serial.crt		# CRT serial number
+crlnumber               = $ca_dir/mgmt/serial.crl		# CRL serial number
+database                = $ca_dir/mgmt/database 		# Database file
+unique_subject          = no					# Require unique subject
+default_days            = 3650					# Default validity
+default_md              = sha256				# MD to use
+policy                  = match_pol				# Default naming policy
+email_in_dn             = no					# Add email to cert DN
+preserve                = no					# Keep passed DN ordering
+name_opt                = ca_default				# Subject DN display options
+cert_opt                = ca_default				# Certificate display options
+copy_extensions         = none					# Copy extensions from CSR
+x509_extensions         = tier2_ca_ext				# Default cert extensions
+default_crl_days        = 365					# How long before next CRL
+crl_extensions          = crl_ext				# CRL extensions
+
+# Naming policies control which parts of a DN end up in the certificate and
+# under what circumstances certification should be denied.
+[ match_pol ]
+countryName             = optional
+organizationName        = match               	# Typically an organization will have it's own PKI 
+organizationalUnitName  = supplied            	# Organizational unit names help shaping the PKI 
+commonName              = supplied           	# Must be present
+
+# These values are listed as a reference.
+# A "match-anything" policy makes most sense for external
+# (not part of the organizations PKI structure) root CAs
+
+[ any_pol ]
+domainComponent         = optional
+countryName             = optional
+stateOrProvinceName     = optional
+localityName            = optional
+organizationName        = optional
+organizationalUnitName  = optional
+commonName              = optional
+emailAddress            = optional
+
+# Certificate extensions define what types of certificates
+# the CA is able to create.
+
+# This section is used when self-signing the root certificate
+[ root_ca_ext ]
+keyUsage                = critical,keyCertSign,cRLSign
+basicConstraints        = critical,CA:true
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid:always
+
+# Since this is a root ca's config file, it is most likely to sign CA request
+# The two sections are configured for different path lengths, hence for a
+# Tier2 or Tier3 pki respectively 
+[ tier2_ca_ext ]
+keyUsage                = critical,keyCertSign,cRLSign
+basicConstraints        = critical,CA:true,pathlen:0
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid:always
+authorityInfoAccess     = @issuer_info
+crlDistributionPoints	= @crl_info
+
+# For more complex setups: a tier3 pki structure 
+[ tier3_ca_ext ]
+keyUsage                = critical,keyCertSign,cRLSign
+basicConstraints        = critical,CA:true,pathlen:1
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid:always
+authorityInfoAccess     = @issuer_info
+crlDistributionPoints	= @crl_info
+
+# CRL extensions exist solely to point to the CA certificate that has issued
+# the CRL.
+[ crl_ext ]
+authorityKeyIdentifier  = keyid:always
+authorityInfoAccess	= @issuer_info
+
+# Authority Information Access (Issuing CA) URL
+# See https://tools.ietf.org/html/rfc5280#section-5.2.7 for details
+# BLUF: an url that points to the certificate used to sign the crl
+#	one of the urls provided SHOULD be a http url
+[ issuer_info ]
+caIssuers;URI.0		= $aia_url
+
+# Where to get the certificate revocation list
+[ crl_info ]
+URI.0			= $crl_url
+EOF_ROOT_CA
+}
+
+cat_intermediate_conf() 
+{
+  cat << "EOF_INTERMEDIATE_CA"
+# Intermediate CA
+# The configuration is customized to meet the needs of a CA-signing CA.
+
+# The [default] section contains global constants that can be referred to from
+# the entire configuration file. It may also hold settings pertaining to more
+# than one openssl command.
+
+[ default ]
+ca_dir                  = @CA_DIR@              	# CA toplevel directory
+ca_name                 = @CA_NAME@             	# CA name
+default_ca              = $ca_name			# The default CA section
+ca_key			= $ca_dir/private/$ca_name.key  # CA private key
+RANDFILE                = $ca_dir/mgmt/rnd        	# Use RANDFILE
+base_url		= http://pki.@CA_NAME@.com	# Sample Base URL
+aia_url			= $base_url/$ca_name.crt	# Authority Information Access URL
+crl_url			= $base_url/$ca_name.crl	# Certificate Revocation List URL
+
+# The [req] section of the configuration file is used by the openssl req command.
+# It defines the CA's key pair, its DN, and the desired extensions for the CA
+# certificate.
+
+[ req ]
+default_bits            = 4096                 	# RSA key size, see the "pki req" command 
+						# for different key types and sizes
+default_keyfile         = $ca_key  		# Default private key file
+encrypt_key             = yes			# Protect private key
+default_md              = sha256		# MD to use
+utf8                    = yes			# Input is UTF-8
+string_mask             = utf8only		# Emit UTF-8 strings
+prompt                  = no			# Don't prompt for DN
+distinguished_name      = dn			# DN section
+req_extensions          = reqext            	# Extensions section
+
+[ dn ]
+countryName             = "@CA_NAME@ Country Name" 
+organizationName        = "@CA_NAME@ Organization"
+organizationalUnitName  = "Intermediate CA"
+commonName              = "Intermediate CA"
+
+# The default root ca does NOT copy extensions
+# We do however define extensions for the certificate request
+# so that when the "copy_extensions" policy is changed or the
+# request gets signed by a different ca, we already have extensions
+# included
+#
+# Since this is an intermediate (ca-signing ca), we request a pathlen of 1
+
+[ reqext ]
+keyUsage                = critical,keyCertSign,cRLSign
+basicConstraints        = critical,CA:true,pathlen:1
+subjectKeyIdentifier    = hash
+authorityInfoAccess 	= OCSP;URI:http://ocsp.my.host/
+authorityInfoAccess     = caIssuers;URI:http://my.ca/ca.html
+
+# The remainder of this configuration file is used by the openssl ca command.
+# The [ca] section defines the locations of CA assets, as well as the policies
+# applying to the CA.
+
+[ ca ]
+certificate             = $ca_dir/${ca_name}.crt       	# The CA cert
+private_key             = $ca_key 			# CA private key
+new_certs_dir           = $ca_dir/certs          	# Certificate archive
+serial                  = $ca_dir/mgmt/serial.crt 	# Serial number file
+crlnumber               = $ca_dir/mgmt/serial.crl 	# CRL number file
+database                = $ca_dir/mgmt/database 	# Index file
+unique_subject          = no				# Require unique subject
+default_days            = 730				# How long to certify for
+default_md              = sha256			# MD to use
+policy                  = match_pol			# Default naming policy
+email_in_dn             = no				# Add email to cert DN
+preserve                = no				# Keep passed DN ordering
+name_opt                = ca_default			# Subject DN display options
+cert_opt                = ca_default			# Certificate display options
+copy_extensions         = copy				# Copy extensions from CSR
+x509_extensions         = ca_ext			# Default cert extensions
+default_crl_days        = 7				# How long before next CRL
+crl_extensions          = crl_ext			# CRL extensions
+
+# Naming policies control which parts of a DN in a certificate signing request
+# end up in the certificate and under what circumstances certification should be denied.
+
+[ match_pol ]
+domainComponent         = optional			# Included if present
+organizationName        = match             		# Has to match this CA
+organizationalUnitName  = optional             		# Included if present
+commonName              = supplied              	# Must be present
+countryName             = optional
+
+[ any_pol ]
+domainComponent         = optional
+countryName             = optional
+stateOrProvinceName     = optional
+localityName            = optional
+organizationName        = optional
+organizationalUnitName  = optional
+commonName              = optional
+emailAddress            = optional
+
+# Certificate extensions define what types of certificates the CA is able to
+# create.
+#
+# Also we use the "copy_extensions" setting to set defaults for certificates
+# signed by this ca for the following fields:
+#
+#subjectKeyIdentifier    = hash
+#authorityKeyIdentifier  = keyid:always
+#authorityInfoAccess 	 = OCSP;URI:http://ocsp.my.host/
+#authorityInfoAccess     = caIssuers;URI:http://my.ca/ca.html
+#
+# Since this is an intermediate (ca-signing ca), we sign requests with a pathlen of 0
+
+[ ca_ext ]
+keyUsage                = critical,keyCertSign,cRLSign
+basicConstraints        = critical,CA:true,pathlen:0
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid:always
+authorityInfoAccess     = @issuer_info
+crlDistributionPoints	= @crl_info
+
+# CRL extensions exist solely to point to the CA certificate that has issued
+# the CRL.
+
+[ crl_ext ]
+authorityKeyIdentifier  = keyid:always
+
+# Authority Information Access (Issuing CA) URL
+[ issuer_info ]
+caIssuers;URI.0		= $aia_url
+
+# Where to get the certificate revocation list
+[ crl_info ]
+URI.0			= $crl_url
+EOF_INTERMEDIATE_CA
+}
+
+# Write a template config file for a signing ca to stdout
+cat_signing_conf() 
+{
+  cat << "EOF_SIGNING_CA"
+# Simple Signing CA
+
+# The [default] section contains global constants that can be referred to from
+# the entire configuration file. It may also hold settings pertaining to more
+# than one openssl command.
+
+[ default ]
+ca_name                 = @CA_NAME@             	# CA name
+ca_dir                  = @CA_DIR@              	# CA top dir
+default_ca              = $ca_name		            	# The default CA section
+ca_key			= $ca_dir/private/$ca_name.key  # CA private key
+RANDFILE                = $ca_dir/mgmt/rnd        	# Use RANDFILE
+base_url		= http://pki.@CA_NAME@.com	# Sample Base URL
+aia_url			= $base_url/$ca_name.crt	# Authority Information Access URL
+crl_url			= $base_url/$ca_name.crl	# Certificate Revocation List URL
+
+# The next part of the configuration file is used by the openssl req command.
+# It defines the CA's key pair, its DN, and the desired extensions for the CA
+# certificate.
+
+[ req ]
+default_bits            = 4096                  	# RSA key size
+default_keyfile         = $ca_key  			# Default private key file
+encrypt_key             = yes				# Protect private key
+default_md              = sha256			# MD to use
+utf8                    = yes				# Input is UTF-8
+string_mask             = utf8only			# Emit UTF-8 strings
+prompt                  = no				# Don't prompt for DN
+distinguished_name      = dn				# DN section
+req_extensions          = reqext             		# Desired extensions
+
+[ dn ]
+countryName             = "@CA_NAME@ Country Name" 
+organizationName        = "@CA_NAME@ Organization"
+organizationalUnitName  = "@CA_NAME@ Signing CA"
+commonName              = "@CA_NAME@ Signing CA"
+
+#
+# The default root ca does NOT copy extensions
+# We do however define extensions for the certificate request
+# so that when the "copy_extensions" policy is changed or the
+# request gets signed by a different ca, we already have extensions
+# included
+#
+# Since this is a signing ca, we request a pathlen of 0
+[ reqext ]
+keyUsage                = critical,keyCertSign,cRLSign
+basicConstraints        = critical,CA:true,pathlen:0
+subjectKeyIdentifier    = hash
+
+# The remainder of the configuration file is used by the openssl ca command.
+# The CA section defines the locations of CA assets, as well as the policies
+# applying to the CA.
+
+[ @CA_NAME@ ]
+certificate             = $ca_dir/$ca_name.crt       	# The CA cert
+private_key             = $ca_key 			# CA private key
+new_certs_dir           = $ca_dir/certs          	# Certificate archive
+serial                  = $ca_dir/mgmt/serial.crt 	# Serial number file
+crlnumber               = $ca_dir/mgmt/serial.crl 	# CRL number file
+database                = $ca_dir/mgmt/database 	# Index file
+unique_subject          = no				# Require unique subject
+default_days            = 730				# How long to certify for
+default_md              = sha256			# MD to use
+policy                  = match_pol			# Default naming policy
+email_in_dn             = no				# Add email to cert DN
+preserve                = no				# Keep passed DN ordering
+name_opt                = ca_default			# Subject DN display options
+cert_opt                = ca_default			# Certificate display options
+copy_extensions         = copy				# Copy extensions from CSR
+x509_extensions         = server_ext			# Default cert extensions
+default_crl_days        = 7				# How long before next CRL
+crl_extensions          = crl_ext			# CRL extensions
+
+# Naming policies control which parts of a DN in a certificate signing request
+# end up in the certificate and under what circumstances certification should be denied.
+
+[ match_pol ]
+domainComponent         = optional			# Included if present              	
+organizationName        = match             		# Must be present
+organizationalUnitName  = match             		# Has to match this CA
+commonName              = supplied              	# Must be present
+countryName             = optional
+
+[ any_pol ]
+domainComponent         = optional
+countryName             = optional
+stateOrProvinceName     = optional
+localityName            = optional
+organizationName        = optional
+organizationalUnitName  = optional
+commonName              = optional
+emailAddress            = optional
+
+# Certificate extensions define what types of certificates the CA is able to
+# create.
+
+# Since "copy_extensions" is set to "copy" (see the ca section above), the
+# extension sections below include basicConstraints with CA:FALSE 
+# Hence, if the request contains a basicConstraints extension it will be
+# ignored so we do not issue CA certificates by mistake.
+#
+# Also we use the "copy_extensions" setting to set defaults for certificates
+# signed by this ca:
+#
+# subjectKeyIdentifier    = hash
+# authorityKeyIdentifier  = keyid:always
+# authorityInfoAccess 	  = OCSP;URI:http://ocsp.my.host/
+# authorityInfoAccess     = caIssuers;URI:http://my.ca/ca.html
+#
+
+[ server_ext ]
+keyUsage                = critical,digitalSignature,keyEncipherment
+basicConstraints        = CA:false
+extendedKeyUsage        = serverAuth
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid:always
+authorityInfoAccess     = @issuer_info
+crlDistributionPoints	= @crl_info
+
+[ client_ext ]
+keyUsage                = critical,digitalSignature,keyEncipherment
+basicConstraints        = CA:false
+extendedKeyUsage        = clientAuth
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid:always
+authorityInfoAccess     = @issuer_info
+crlDistributionPoints	= @crl_info
+
+[ identity_ext ]
+keyUsage                = critical,digitalSignature,keyEncipherment
+basicConstraints        = CA:false
+extendedKeyUsage        = emailProtection,clientAuth
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid:always
+authorityInfoAccess     = @issuer_info
+crlDistributionPoints	= @crl_info
+
+# CRL extensions exist solely to point to the CA certificate that has issued
+# the CRL.
+
+[ crl_ext ]
+authorityKeyIdentifier  = keyid:always
+
+# Authority Information Access (Issuing CA) URL
+[ issuer_info ]
+caIssuers;URI.0		= $aia_url
+
+# Where to get the certificate revocation list
+[ crl_info ]
+URI.0			= $crl_url
+EOF_SIGNING_CA
+}
+
+# Write a template request config file to stdout
+cat_request_conf() 
+{
+  cat << "EOF_REQUEST_CONF"
+# Sample request configuration file
+
+# see https://www.openssl.org/docs/manmaster/apps/config.html
+# for an overview of the openssl config format
+
+# The next part of the configuration file is used by the openssl req command.
+# It defines the CA's key pair, its DN, and the desired extensions for the CA
+# certificate.
+
+[ req ]
+RANDFILE               	= ~/.rnd		# Use RANDFILE
+default_bits            = 4096                  # RSA key size
+default_keyfile		= private.key		# Default private key file
+encrypt_key             = yes                   # Encrypt private key
+default_md              = sha256                # see https://www.entrust.com/lp/sha-1-sha-2-faq/ 
+utf8                    = yes                   # Input is UTF-8
+string_mask             = utf8only              # Emit UTF-8 strings
+prompt                  = no                    # Don't prompt for DN
+distinguished_name      = rootca_dn             # DN section
+req_extensions          = reqext                # Desired extensions
+
+# Distinguished name
+[ rootca_dn ]
+0.domainComponent       = "org"
+1.domainComponent       = "sample"
+organizationName        = "Simple Inc"
+organizationalUnitName  = "Sample Root CA"
+commonName              = "Sample Root CA"
+
+# X509v3 extensions for the root CA
+[ reqext ]
+keyUsage                = critical,keyCertSign,cRLSign
+basicConstraints        = critical,CA:true,pathlen:2
+subjectKeyIdentifier    = hash
+
+# Certificate extensions define what types of certificates the CA is able to
+# create.
+
+[ root_ca_ext ]
+keyUsage                = critical,keyCertSign,cRLSign
+basicConstraints        = critical,CA:true
+subjectKeyIdentifier    = hash
+
+[ signing_ca_ext ]
+keyUsage                = critical,keyCertSign,cRLSign
+basicConstraints        = critical,CA:true,pathlen:0
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid:always
+
+# CRL extensions exist solely to point to the CA certificate that has issued
+# the CRL.
+
+[ crl_ext ]
+authorityKeyIdentifier  = keyid:always
+prompt                 	= no
+EOF_REQUEST_CONF
+}
+
+# Write a TLS/IPSec server request config file to stdout
+cat_tls_ipsec_request_conf() 
+{
+  cat << "EOF_TLS_REQUEST_CONF"
+# Certificate signing request configuration customized for 
+# certificates intended to be used with EAP-TLS 
+
+# Generic request section for tls/ipsec certificates 
+[ req ]
+default_bits            = 4096                  # RSA key size
+encrypt_key             = @ENCRYPT_KEY@         # Password-protect private key
+default_keyfile		= @KEYFILE@		# The private keyfile name
+default_md              = sha256                # MD to use
+utf8                    = yes                   # Input is UTF-8
+string_mask             = utf8only              # Emit UTF-8 strings
+prompt                  = no                    # Prompt for DN
+distinguished_name      = dn 	        	# DN template
+req_extensions          = tls_ipsec_ext       	# Desired extensions
+
+
+[ dn ]
+organizationName        = "4. Organization Name        (eg, company)  "
+organizationalUnitName  = "5. Organizational Unit Name (eg, section)  "
+commonName              = "6. Common Name              (eg, FQDN)     "
+
+# Conforming implementations generating new certificates with Network
+# Access Identifiers (NAIs) MUST use the rfc822Name in the subject
+# alternative name field to describe such identities.  The use of the
+# subject name field to contain an emailAddress Relative Distinguished
+# Name (RDN) is deprecated, and MUST NOT be used.  The subject name
+# field MAY contain other RDNs for representing the subject's identity.
+[ tls_ipsec_ext ]
+keyUsage                = critical,digitalSignature,keyEncipherment,keyAgreement
+extendedKeyUsage        = @EXTENDED_KEY_USAGE@ 
+subjectKeyIdentifier    = hash
+subjectAltName          = @SAN@
+EOF_TLS_REQUEST_CONF
+}
+
+# Write a EAP-TLS certificate request config file to stdout
+cat_eap_tls_request_conf() 
+{
+  cat << "EOF_EAP_TLS_REQUEST_CONF"
+# Certificate signing request configuration customized for 
+# certificates intended to be used with EAP-TLS 
+
+# The key-configuration in this section only applies when the
+# -l | legacy switch is used when running "pki eap-tls" 
+[ req ]
+default_bits            = 4096                  # RSA key size
+encrypt_key             = @ENCRYPT_KEY@         # Password-protect private key
+default_keyfile		= @KEYFILE@		# The private keyfile name
+default_md              = sha256                # MD to use
+utf8                    = yes                   # Input is UTF-8
+string_mask             = utf8only              # Emit UTF-8 strings
+prompt                  = no                    # Prompt for DN
+distinguished_name      = @IDENTITY@         	# DN template
+req_extensions          = eap_tls_ext         	# Desired extensions
+
+# In EAP-TLS, the Peer-Id and Server-Id are determined from the subject
+# or subjectAltName fields in the peer and server certificates.  For
+# details, see Section 4.1.2.6 of [RFC3280].  Where the subjectAltName
+# field is present in the peer or server certificate, the Peer-Id or
+# Server-Id MUST be set to the contents of the subjectAltName.  If
+# subject naming information is present only in the subjectAltName
+# extension of a peer or server certificate, then the subject field
+# MUST be an empty sequence and the subjectAltName extension MUST be
+# critical.
+[ @IDENTITY@ ]
+organizationName        = "4. Organization Name        (eg, company)  "
+organizationalUnitName  = "5. Organizational Unit Name (eg, section)  "
+commonName              = "6. Common Name              (eg, FQDN)     "
+
+# Where the peer identity represents a host, a subjectAltName of type
+# dnsName SHOULD be present in the peer certificate.  Where the peer
+# identity represents a user and not a resource, a subjectAltName of
+# type rfc822Name SHOULD be used, conforming to the grammar for the
+# Network Access Identifier (NAI) defined in Section 2.1 of [RFC4282].
+# If a dnsName or rfc822Name are not available, other field types (for
+# example, a subjectAltName of type ipAddress or
+# uniformResourceIdentifier) MAY be used.
+
+# Conforming implementations generating new certificates with Network
+# Access Identifiers (NAIs) MUST use the rfc822Name in the subject
+# alternative name field to describe such identities.  The use of the
+# subject name field to contain an emailAddress Relative Distinguished
+# Name (RDN) is deprecated, and MUST NOT be used.  The subject name
+# field MAY contain other RDNs for representing the subject's identity.
+[ eap_tls_ext ]
+keyUsage                = critical,digitalSignature,keyEncipherment,keyAgreement
+extendedKeyUsage        = @EXTENDED_KEY_USAGE@ 
+subjectKeyIdentifier    = hash
+subjectAltName          = @SAN@
+EOF_EAP_TLS_REQUEST_CONF
+}
+
+# Write an email request config file to stdout
+cat_email_request_conf() 
+{
+  cat << "EOF_EMAIL_REQUEST_CONF"
+@email_request_config_file@
+EOF_EMAIL_REQUEST_CONF
+}
+
+# Write the config file to the given directory, this function
+# is a convenience wrapper for the above config file functions
+# Usage: write_conf TYPE 
+write_conf() 
+{
+  # Mere argument check
+  [ -z ${1+x} ] && debug "write_conf(): missing argument to function call"
+
+  # Supported config file types
+  # Practically, a two- or three-tier CA structure should fit any purpose
+  case $1 in 
+    root)          cat_root_conf ;;
+    intermediate)  cat_intermediate_conf ;;
+    signing) 	   cat_signing_conf ;;
+    *) 		   debug "write_conf(): illegal argument to function call <$1>" ;;
+  esac
+  return 0
+}
+
+# Parse a CA config file to substitute CA_NAME and CA_DIR variables
+# Usage: parse_conf CONFIG_FILE
+
+parse_conf() 
+{
+  # Mere argument check
+  [ -z ${1+x} ] && debug "parse_conf(): missing argument to function call"
+
+  # Substitute the two variables using sed
+  if sed -i \
+  -e "s/@CA_NAME@/$ca_name/g" \
+  -e "s|@CA_DIR@|$ca_dir|g" \
+  $1; then
+    return 0
+  else 
+    return 1
+  fi
+}
+# Generate or verify a certificate signing request
+
+req_help()
+{
+      cat << EOF_REQ_HELP
+Usage: pki req [OPTION] <config file>
+ Create a certificate signing request (csr) from the information provided
+ in <config file>. If no options are given, a sample csr config file is
+ printed to stdout. 
+ If the provided config file defines a CA, then default filenames for
+ private key and csr are derived from the VALUES IN the config file.
+ Otherwise, default output filenames are derived from the CONFIG FILENAME.
+ An existing keyfile will be used. If no keyfile is present, it will be
+ created (RSA 4096bit). 
+
+Options:
+ -e, --ecc                  Create an elliptic curve (ECDSA) key instead of the
+                              default RSA key
+ -w, --windows              By default, the secp256k1 curve will be used when generating
+                              an ecc private key. When "windows" is specified, a windows
+                              compatible (P-256 i.e. prime256v2) curve is used.
+ -u, --unencrypted          The generated private key will not be encrypted (e.g. some
+                              servers require unencrypted keys with their certificates) 
+ -k, --keyfile <file>       Use <file> as private key to sign the csr. If <file>
+                              does not exist, a private key is generated and
+                              written to <file>
+ -o, --outfile <file>       Write csr to <file>. Use this option to override 
+                              the default filename (see above)
+ -p, --passphrase <secret>  Encrypt the private key using passphrase <secret> or, if a
+                             keyfile is provided, use this passphrase for decryption of
+                             the given key. Either way the given passphrase is automatically
+                             applied when decrypting the private key for signing the csr
+ -v, --verify 	  	    Use this option to verify a SIGNED csr. With this
+			     option, the given filename is not considered a 
+                             config file but rather a signed csr
+EOF_REQ_HELP
+  return 0
+}
+
+#########################################################################
+
+req_cmd() 
+{
+  local csr_conf private_key key_explicit=0 key_options ecc=0 windows=0 encrypted=1 outfile verify=0
+  local optlist="c:ek:o:p:uv:w+config:+ecc+keyfile:+outfile:+passphrase+unencrypted+verify+windows"
+  local req_passphrase req_nopt_arg
+
+  # parse the command line for specific settings
+  while [ $OPTIND -le $argc ]; do
+
+    if getopts $optlist req_opt; then 
+
+      case "$req_opt" in
+  
+        # This option generates an ecc key instead of the default
+        # RSA key
+        e|ecc)
+          [ $ecc -eq 0 ] || more_than_once "$req_opt" 
+          ecc=1
+          key_options="${key_options+$key_options | }ecc"
+          ;;
+
+        # The keyfile may be defined explicitly
+        # We need the key_explicit flag later on to be able to distinguish
+        # the two key exists / key specified on cmdline cases
+        k|keyfile)
+          [ -z ${private_key+x} ] || more_than_once "$req_opts"
+          key_explicit=1
+          private_key="$OPTARG"
+          ;;
+
+        # Specify the output file name
+        o|outfile)
+          [ -z ${outfile+x} ] || more_than_once "$req_opts"
+	  outfile="$OPTARG"
+          ;;
+
+        # Provide a passphrase on the cmdline with all the pros and cons
+        p|passphrase)
+          [ -z ${req_passphrase+x} ] || more_than_once "$req_opts"
+          req_passphrase="$OPTARG"
+          ;;
+
+        # This option uses a Windows CNG - compatible curve when
+        # creating an ecc key
+        w|windows)
+          [ $windows -eq 0 ] || more_than_once "$req_opts"
+          key_options="${key_options+$key_options | }windows-compatible"
+          windows=1
+          ;;
+
+        # Generate an unencrypted key (e.g. for server certificates)
+        u|unencrypted)
+          [ $encrypted -eq 1 ] || more_than_once "$req_opts"
+          key_options="${key_options+$key_options | }unencrypted"
+          encrypted=0
+          ;;
+
+        # Verify a request
+        v|verify)
+          [ $verify -eq 0 ] || more_than_once $OPTARG
+	  verify=1
+          ;;
+
+        # Missing argument to option, invalid option
+        ":") missing_argument $OPTARG ;;
+        "?") invalid_option ;; 
+           
+      esac
+
+    # The non-option argument is the config file to use 
+    # We only accept one config file, i.e. create one request at a time
+    else
+      argv $OPTIND req_nopt_arg
+      [ -z ${csr_conf+x} ] || usage_error "invalid argument on command line <$csr_nopt_arg>"
+      csr_conf="$req_nopt_arg"
+      OPTIND=$((OPTIND+1))
+    fi
+
+  done
+
+  # If the -v switch was given, it's not a config file but 
+  # a signed csr to verify 
+  if [ $verify -eq 1 ]; then
+    [ -z ${csr_conf+x} ] && usage_error "No csr to verify"
+
+    if openssl req -noout -in $config >/dev/null 2>&1; then
+      runtime_msg "Certificate verified."
+      return 0
+    else
+      runtime_msg "Certificate failed verification."
+      return 1
+    fi
+  fi
+
+  # No config file, no signing request
+  if [ -z ${csr_conf+x} ]; then
+    usage_error "No config file to create a csr"
+  # Otherwise we SET "config" and hence from now on we USE $config !
+  else
+    set_config "$csr_conf" || return 1
+  fi
+
+  # If a passphrase was provided, we make sure it's not whitespace only
+  if ! [ -z ${req_passphrase+x} ]; then
+    case "$req_passphrase" in 
+      *[![:space:]]*) : ;; 
+      *)  usage_error "the passphrase must not be empty" ;;
+    esac
+  fi
+
+  # If "ca_name" and "ca_dir" are present in the config file, 
+  # it is considered a ca config file
+  # File name values are then created from the config file variables
+
+  if get_ca_from_config $config; then
+
+    [ -z ${outfile+x} ] && outfile=$ca_dir/$ca_name.csr
+    [ -z ${private_key+x} ] && private_key=$ca_dir/private/$ca_name.key
+
+  # If it's not a ca config file, derive "default_keyfile" from req section
+  # or set the default value for the private keyfile name 
+  # Derive certificate request filename from the config filename
+  else
+    
+    # Private keyfile name
+    [ -z ${private_key+x} ] && private_key=$(awk '/^default_keyfile / { print $3 }' $config)
+    [ -z "$private_key" ] && private_key=${config%.*}.key
+
+    # Outfile name
+    [ -z ${outfile+x} ] && outfile=${config%.*}.csr
+
+  fi
+
+  # We do not overwrite existing files
+  if [ -e "$outfile" ]; then
+    runtime_error "won't overwrite existing file: <$outfile>"
+    return 1
+  fi
+
+  # If the private key does not exist, it will be created now
+  if ! [ -e "${private_key}" ]; then
+
+    # If creating a private key fails, that's an error
+    # This function is added to avoid redundancy 
+    failed_key() { runtime_error "Generating a private key failed"; }
+
+    # Use given key options or set default values 
+    [ -z ${key_options+x} ] && key_options="default: RSA 4096bit"
+
+    # Short runtime info
+    runtime_msg "Creating private key for certificate request"
+
+    # Generate an ecc key if required
+    if [ $ecc -eq 1 -o $windows -eq 1 ]; then
+
+      # For windows compatibility we need to stick to CNG supported curves
+      # otherwise we use the curve bitcoin is using, too
+      [ $windows -eq 0 ] && curve=secp256k1 || curve=prime256v1 
+      if ! gen_ecc_key ${private_key} $curve $encrypted "${req_passphrase-}"; then
+        failed_key 
+        return 1
+      fi
+
+    # By default, a rsa key is generated
+    else
+      if ! gen_rsa_key ${private_key} $encrypted "${req_passphrase-}"; then
+        failed_key 
+        return 1
+      fi
+    fi
+
+  # If a key exists, it will be used. This means that key options are
+  # not effective, so if key options were given this is probably not 
+  # what the user wants, hence we exit with error
+  else
+    if [ $windows -eq 1 -o $ecc -eq 1 -o $encrypted -eq 0 ]; then
+      runtime_error "no key options allowed when using existing keyfile"
+      return 1
+    fi
+    key_options="Using existing key"
+  fi
+    
+  # Print some diagnostics
+  echo "Config file: 	<$config>"
+  echo "Private key:	<$private_key>"
+  echo "Key options: 	<$key_options>"
+  echo "Output file: 	<$outfile>"
+
+  # Create the CSR and write it to $outfile
+  # If a passphrase was provided, it's added to the command
+  if run_openssl $outfile req -new -config $config -key $private_key \
+                 "${req_passphrase+-passin pass:$req_passphrase}"; then
+    return 0
+  else
+    return 1
+  fi
+}
+# View the most common x509 file types 
+
+view_help() 
+{
+      cat << EOF_VIEW_HELP
+Usage: pki view <file>
+ Print the text version x509 certificate or certificate request. 
+
+Options:
+ -n, --name <ca name>   No options so far. TODO	
+EOF_VIEW_HELP
+  return 0
+}
+
+#####################################################################
+
+view_cmd() 
+{
+  local view_opt infile identified=0 view_nopt_arg
+  local filetypes="x509 req"
+  local informs="PEM DER NET"
+  local view_opt_list="l+list"
+  local output_options="-text -noout"
+
+  # parse the command line for specific settings
+  while [ $OPTIND -le $argc ]; do
+
+    if getopts $view_opt_list view_opt; then 
+
+      case "$view_opt" in
+
+        # Specify the output file name
+        o|outfile)
+          [ -z ${outfile+x} ] || more_than_once $OPTARG
+	  outfile=$OPTARG
+          ;;
+
+        # Missing argument to option, invalid option
+        ":") missing_argument $OPTARG ;;
+        "?") invalid_option ;; 
+           
+      esac
+
+    # The non-option argument is the file to view 
+    else
+      argv $OPTIND view_nopt_arg
+      if [ -z ${infile+x} ]; then
+        infile="$view_nopt_arg"
+        OPTIND=$((OPTIND+1))
+      else
+        usage_error "invalid argument on command line <$view_nopt_arg>" 
+      fi
+    fi
+
+  done
+
+  # No input file, nothing to view
+  if [ -z ${infile+x} ]; then
+    usage_error "No input file to view"
+  else
+    is_readable $infile
+  fi
+
+  # The outer loop runs through the known file types
+  for filetype in $filetypes; do
+
+    # Inner loop runs through all known file formats 
+    for inform in $informs; do 
+      view_cmd="openssl $filetype -in $infile -inform $inform"
+      $view_cmd > /dev/null 2>&1 && { identified=1; break; }
+    done
+    [ $identified -eq 1 ] && break
+
+  done
+ 
+  # If the file format is identified, output the text 
+  # Otherwise throw a runtime errorr 
+  if [ $identified -eq 1 ]; then
+    $view_cmd $output_options
+  else
+    runtime_error "Unknown file type"
+    return 1
+  fi
+  return 0
+}
+# Selfsign a root ca's certificate request
+
+selfsign_help()
+{
+      cat << EOF_SELFSIGN_HELP
+Usage: pki selfsign [options] <csr> 
+  Selfsign the (root ca's) Certificate Signing Request in file <csr>
+  This command makes most sense after creating a ca of type "root ca"
+  The generated certificate is a "stand alone" certificate, it will
+  not affect the ca database in terms of serial number etc.
+
+Options:
+ -c, --config <file>	  Read configuration from <file> [default=./config]
+ -e, --extension <name>	  Use extension <name> [default=root_ca_ext]
+                            This option can be given multiple times. For
+ 	                    each given extension, a section must exist in
+ 	                    the config file.
+ -o, --outfile <file>     Specify the output file [default="ca_name".crt]	
+                            Use this option if you want to explicitly specify
+ 		            the filename of the certificate that will be output.
+ 			    By default, the output filename will be derived from
+ 		            values set in the config file
+ -p, --passphrase <pass>  The private key's passphrase. If this value is unset and
+                           the private key is encrypted, the passphrase will be asked
+                           for
+ -s, --serial <number>	  Set the serial number (default is 1)
+ -d, --digest <digest>	  Specify the digest algorithm to use (default is sha256)
+ -v, --validity <days>	  Specify the certificate's validity in days (default is 30 years)
+EOF_SELFSIGN_HELP
+  return 0
+}
+
+###########################################################################
+
+selfsign_cmd() 
+{
+  local sign_opt ext_list extensions csr selfsign_cmd outfile privkey_passphrase 
+  local sign_key validity=10680 digest=sha256 serial=1 selfsign_nopt_arg
+  local optlist="c:d:e:o:p:r:s:v:+config:+digest:+extensions+outfile:+passphrase+request:+serial:+validity:"
+
+  # parse the command line for specific settings
+  while [ $OPTIND -le $argc ]; do
+
+    if getopts $optlist sign_opt; then 
+
+      case "$sign_opt" in
+
+        # Specify the configuration file to use
+	# Since we are using the x509 command, only extension
+        # sections in the config file are relevant
+        c|config) set_config "$OPTARG" ;;
+
+        # Provide a passphrase on the cmdline with all the pros and cons
+        p|passphrase)
+          [ -z ${privkey_passphrase+x} ] || more_than_once "$sign_opt"
+          privkey_passphrase="$OPTARG"
+          ;;
+
+        # Specify the extension sections to use, these must be
+	# present in the config file
+        e|extensions)
+          ext_list="${ext_list+$ext_list }$OPTARG" 
+          ;;
+
+        # Specify the output file
+        o|outfile)
+          [ -z ${outfile+x} ] || more_than_once "$sign_opt" 
+	  outfile=$OPTARG
+          ;;
+
+        # Digest to use, default is sha256
+	d|digest)
+          digest=$OPTARG
+	  ;;
+
+	# Serial Number for the certificate, default is 1
+	s|serial)
+	  serial=$OPTARG
+	  ;;
+
+        # Validity in days for the certificate, default is 30 years
+  	v|validity)
+	  validity=$OPTARG
+          ;;
+
+        # Missing argument to option, invalid option
+        ":") missing_argument $OPTARG ;;
+        "?") invalid_option ;; 
+           
+      esac
+
+    # The non-option argument is the request to selfsign 
+    else
+      argv $OPTIND selfsign_nopt_arg
+      [ -z ${csr+x} ] || usage_error "invalid argument on command line <$selfsign_nopt_arg>"
+      csr="$selfsign_nopt_arg"
+      OPTIND=$((OPTIND+1))
+    fi
+
+  done
+
+  # No request to selfsign, no signinature
+  [ -z ${csr+x} ] && usage_error "Missing argument: certificate signing request"
+
+  # 
+
+  # Make sure we can read input files (global default for $config is "./config")
+  for file in "$csr" "$config"; do
+    if ! is_readable "$file"; then
+      runtime_error "cannot read file: <$file>"
+      return 1
+    fi
+  done
+
+  # Since we're self signing, this is most likely a ROOT CA creating
+  # the root certificate. Hence this is the default extension if no
+  # extensions are provided using the -e option 
+  #
+  # If extensions are provided using -e, we make sure the corresponding
+  # sections are present in the config file
+ 
+  # Set the default if no extensions were given 
+  [ -z ${ext_list+x} ] && ext_list="root_ca_ext"
+
+  # Report an error if an extension is not found in the config file
+  for ext in $ext_list; do
+    if grep "\[ *${ext} *\]" $config >/dev/null 2>&1; then
+      extensions="${ext_opts+$ext_opts }-extensions $ext"
+    else
+      runtime_error "no section for $ext in <$config>"
+      return 1
+    fi
+  done
+
+  # If no outfile is defined, we assume a default file name in accordance
+  # with the default settings in the config file: $ca_dir/$ca_name.crt
+  # (values are retrieved from the config file)
+
+  get_ca_from_config $config || runtime_error "Could not get ca name from <$config>"
+
+  # We make sure not to overwrite existing files
+  if [ -z ${outfile+x} ]; then
+    outfile=$ca_dir/${ca_name}.crt
+  fi
+  
+  # We assume the default keyfile name (MAYBE: add a k|key option?)"
+  sign_key=${ca_dir}/private/${ca_name}.key
+
+  # Overwriting is probably not what the user wanted
+  if [ -e $outfile ]; then
+    runtime_error "won't overwrite existing file: <$outfile>" 
+    return 1
+  fi
+
+  # Output diagnostics: 
+  echo "Output file: 	<$outfile>"
+  echo "Config:		<$config>"
+  echo "Request:	<$csr>"
+  echo "Sign key: 	<$sign_key>"
+  echo "Extensions:	<$ext_list>"
+  echo
+
+  # All options are set, now selfsign the certificate request and return
+  selfsign_cmd="x509 -req -signkey $sign_key \
+	        -days $validity -set_serial $serial -$digest \
+		-extfile $config $extensions \
+		-in $csr \
+                ${privkey_passphrase+-passin pass:$privkey_passphrase}"
+
+  run_openssl "${outfile}" "$selfsign_cmd" && return 0 || return 1 
+
+}
+
+# Sign a certificate request
+
+sign_help()
+{
+      cat << EOF_SIGN_HELP
+Usage: pki sign [options] <file>
+  Sign the certificate signing request (csr) in <file> 
+
+Options:
+ -c, --config <file|dir>  Read configuration from <file> [default=./config]
+  			    Alternatively you may specify a directory, if that
+		            directory has a ca configuration file named <config>
+			    (i.e. the directory was created using the "initca" command)
+ -e, --extension <name>	  Use extension <name> [default=set in config file]
+			    This option can be given multiple times. For
+			    each given extension, a section must exist in
+			    the config file.
+ -o, --outfile <file>	  Specify the output file [default="ca_name".crt]	
+			    Use this option if you want to explicitly specify
+			    the filename of the certificate that will be output.
+			    By default, the output filename will be derived from
+			    the config file basename.
+EOF_SIGN_HELP
+  return 0
+}
+
+#######################################################################
+
+sign_cmd() 
+{
+  local sign_opt config_set=0 ext_list ext_opts="" csr sign_cmd outfile
+  local optlist="c:e:o:+config:+extensions+outfile:" csr_nopt_arg
+
+  # parse the command line for specific settings
+  while [ $OPTIND -le $argc ]; do
+
+    if getopts $optlist sign_opt; then 
+
+      case "$sign_opt" in
+
+        # Specify the configuration file or directory to use 
+        c|config) 
+	  set_config "$OPTARG" || return 1
+          ;;
+
+        # Specify the extensions to use
+        e|extensions)
+          ext_list="${ext_list+$ext_list }$OPTARG" 
+          ;;
+
+        # Specify the output file
+        o|outfile)
+          [ -z ${outfile+x} ] || more_than_once $OPTARG
+	  outfile=$OPTARG
+          ;;
+
+        # Missing argument to option, invalid option
+        ":") missing_argument $OPTARG ;;
+        "?") invalid_option ;; 
+           
+      esac
+
+    # The non optional argument is the certificate request to sign
+    else
+      argv $OPTIND csr_nopt_arg
+      if [ -z ${csr+x} ]; then
+        csr="$csr_nopt_arg"
+        OPTIND=$((OPTIND+1))
+      else
+        usage_error "invalid argument on command line <$csr_nopt_arg>"
+      fi
+    fi
+  done
+
+  # We need a readable certificate signing request 
+  [ -z ${csr+x} ] && usage_error "Certificate signing request not specified"
+  if ! is_readable $csr; then
+    runtime_error "cannot read csr <$csr>"
+    return 1
+  fi
+
+  # If extensions are provided using -e, we make sure the corresponding
+  # sections are present in the config file
+  if [ -n "${ext_list+x}" ]; then
+
+    # Report an error if an extension is not found in the config file
+    for ext in $ext_list; do
+      if grep "\[ *${ext} *\]" $config >/dev/null 2>&1; then
+        ext_opts="-extensions $ext"
+      else
+        runtime_error "No section for $ext in <$config>"
+        return 1
+      fi
+    done
+
+  else
+    ext_list="ca default extensions"
+  fi
+
+  # If no outfile is defined, we create a name from the certificate request 
+  if [ -z ${outfile+x} ]; then
+    outfile=${csr%.*}.crt
+  fi
+
+  # We do not want to overwrite existing certificates 
+  if [ -e $outfile ]; then
+    runtime_error "file already exists: <$outfile>"
+    return 1
+  fi
+
+  # Output diagnostics: 
+  echo "Config:		<$config>"
+  echo "Request:	<$csr>"
+  echo "Extensions:	<$ext_list>"
+  echo "Output file: 	<$outfile>"
+  echo
+
+  # All options are set, now sign the certificate request
+  sign_cmd="ca -config $config -in $csr ${ext_opts} -notext"
+  run_openssl $outfile $sign_cmd && return 0 || return 1
+}
+# Output a TLS / IPSEC server or client request file which
+# can then be edited and signed by a signing ca
+
+tls_ipsec_help()
+{
+      cat << EOF_TLS_IPSEC_HELP
+Usage: pki server [options] <file>
+  Create a generic, TLS/IPSec certificate signing request
+
+Options:
+ -c, --client		Generate a client csr [default=server csr]
+
+EOF_TLS_IPSEC_HELP
+  return 0
+}
+
+########################################################################
+
+tls_ipsec_cmd() 
+{
+  local req_name encrypt_key ext_usage client_req=0 san
+  local optlist="c+client" tls_nopt_arg
+
+  # parse the command line for specific settings
+  while [ $OPTIND -le $argc ]; do
+
+    if getopts $optlist req_opt; then 
+
+      case "$req_opt" in
+
+        # Specify the output file
+        c|client)
+          [ $client_req -eq 0 ] || more_than_once $OPTARG
+	  client_req=1 
+          ;;
+
+        # Missing argument to option, invalid option
+        ":") missing_argument $OPTARG ;;
+        "?") invalid_option ;; 
+           
+      esac
+
+    # the actual certificate request name is a non-option argument
+    else
+      argv $OPTIND tls_nopt_arg
+      if [ -z ${req_name+x} ]; then
+        req_name="$tls_nopt_arg"
+        OPTIND=$((OPTIND+1))
+      else
+        usage_error "invalid argument on command line <$tls_nopt_arg>" 
+      fi
+    fi
+  done
+
+  # We need a filename for the server request
+  [ -z ${req_name+x} ] && usage_error "Certificate signing request name not specified"
+
+  # We do not want to overwrite existing certificates 
+  [ -e $req_name ] && runtime_error "file already exists: <$req_name>"
+
+  # Set client / server extended key Usage
+  if [ $client_req -eq 0 ]; then
+    encrypt_key="no"
+    ext_usage="serverAuth"
+    san="DNS:sample.uri.org"
+  else
+    encrypt_key="yes"
+    ext_usage="clientAuth"
+    san="email:peer@sample.uri.org"
+  fi
+  
+  echo "TLS/IPSec Server Request:	<$req_name>"
+  echo "Extended Key Usage:		<$ext_usage>"
+
+  # Write the server certificate signing request config file to $server
+  # and modify it to match the given name
+  cat_tls_ipsec_request_conf | \
+  sed \
+  -e "s|@KEYFILE@|${req_name%.*}.key|g" \
+  -e "s/@ENCRYPT_KEY@/$encrypt_key/g" \
+  -e "s/@EXTENDED_KEY_USAGE@/$ext_usage/g" \
+  -e "s/@SAN@/$san/g" \
+  > $req_name
+
+  return 0
+}
+# Output a certificate signing request whose intended usage is
+# as a peer- or server-certificate in EAP-TLS
+
+eap_tls_help()
+{
+      cat << EOF_EAP_TLS_HELP
+Usage: pki eap-tls [options] <name>
+  Create a client or server certificate request configuration file <name>
+  for certificates used during EAP-TLS handshakes in e.g. wireless LANs.
+  (In EAP-TLS terminology the client is called "peer")
+
+Options:
+ -c, --client	The certificate configuration will be customized
+		 for a "peer_id" (default is "server_id")	
+ -l, --legacy	By default, an ECC-key will be created for the certificate
+		  which will be used automatically by the "req" command.
+		  The legacy-option disables the key creation which effectively
+		  means that when running the "req" command, the default 4096-bit
+		  RSA key will be created with the certificate signing request. 
+ -w, --windows	If the certificate will be used by a Windows client, this option
+                  will generate the ECC-key using a NIST-approved curve which is 
+                  suitable for the Windows CNG crypto api.
+EOF_EAP_TLS_HELP
+  return 0
+}
+
+##########################################################################
+
+eap_tls_cmd() 
+{
+  local req_name keyfile encrypt_key=0 ext_usage legacy=0 client_req=0 cng=0 san
+  local optlist="clw+client+legacy+windows" req_nopt_arg
+
+  # parse the command line for specific settings
+  while [ $OPTIND -le $argc ]; do
+
+    if getopts $optlist req_opt; then 
+
+      case "$req_opt" in
+
+        # generate a peer_id certificate 
+        c|client)
+          [ $client_req -eq 0 ] || more_than_once "$req_opt"
+	  client_req=1 
+          ;;
+
+        # generate the legacy rsa key instead of a modern ecdsa key
+        l|legacy)
+          [ $legacy -eq 0 ] || more_than_once "$req_opt"
+          legacy=1
+          ;;
+
+        # request generation of a key usable by the Windows CNG 
+        w|windows)
+          [ $cng -eq 0 ] || more_than_once "$req_opt"
+          cng=1
+          ;;
+
+        # Missing argument to option, invalid option
+        ":") missing_argument $OPTARG ;;
+        "?") invalid_option ;; 
+           
+      esac
+
+    # the actual certificate request name is a non-option argument
+    else
+      argv $OPTIND req_nopt_arg
+      if [ -z ${req_name+x} ]; then
+        req_name="${req_nopt_arg}.conf"
+        OPTIND=$((OPTIND+1))
+      else
+        usage_error "invalid argument on command line <$req_nopt_arg>"
+      fi
+    fi
+  done
+
+  # You cannot have both legacy AND windows compatibility
+  if [ $cng -eq 1 -a $legacy -eq 1 ]; then
+    usage_error "Legacy option not compatible with Windows option"
+  fi
+
+  # We need a filename for the request
+  [ -z ${req_name+x} ] && usage_error "Certificate signing request name not specified"
+
+  # We do not want to overwrite existing certificates 
+  if [ -e $req_name ]; then
+    runtime_error "file already exists: <$req_name>"
+    return 1
+  fi
+
+  # If the legacy key is not requested, an ecdsa key will be created
+  # By default we use the secp256k1 curve, which is good enough for BitCoin, too
+  # If -w / windows is required, we have to use one of the curves supported by
+  # the Windows crypto API, see main.sh / gen_cng_ecc_key() for details
+  # We generate the parameters first, then the key so we can encrypt 
+  keyfile=${req_name%.*}.key
+  if [ $legacy -eq 0 ]; then
+
+    if [ -e $keyfile ]; then
+      echo "Not creating private key (file exists)"
+    else 
+      # If it's not a server request, we encrypt the key
+      [ $client_req -eq 1 ] && encrypt_key=1
+      if [ $cng -eq 1 ]; then
+        echo "[ Generating ecdsa key using prime256v1 elliptic curve algorithm ]"
+        gen_cng_ecc_key $keyfile $encrypt_key
+      else
+        echo "[ Generating ecdsa key using sec256k1 elliptic curve algorithm ]"
+        gen_ecc_key $keyfile secp256k1 $encrypt_key
+      fi
+    fi
+  fi
+
+  # Set client / server extended key Usage
+  if [ $client_req -eq 0 ]; then
+    encrypt_key="no"
+    identity="server_id"
+    ext_usage="serverAuth" 
+    san="DNS:sample.uri.org"
+  else
+    encrypt_key="yes"
+    identity="peer_id"
+    ext_usage="clientAuth"
+    san="email:peer@sample.uri.org"
+  fi
+ 
+  # Print some diagnostics 
+  echo "EAP-TLS Certificate Request:	<$req_name>"
+  echo "Extended Key Usage:		<$ext_usage>"
+  echo "EAP Identity:		        <$identity>"
+  echo "SAN Type:			<$san>"
+
+  # Write the server certificate signing request config file to $server
+  # and modify it to match the given name
+  cat_eap_tls_request_conf | \
+  sed \
+  -e "s|@KEYFILE@|$keyfile|g" \
+  -e "s/@ENCRYPT_KEY@/$encrypt_key/g" \
+  -e "s/@IDENTITY@/$identity/g" \
+  -e "s/@EXTENDED_KEY_USAGE@/$ext_usage/g" \
+  -e "s|@SAN@|$san|g" \
+  > $req_name
+
+  return 0
+}
+# Initialize a directory to be used for a ca
+
+initca_help() 
+{
+      cat << EOF_INITCA_HELP
+Usage: pki initca <CA TYPE> [OPTIONS] [<dirname>]
+ Initialize a directory <dirname> with the directory and file tree
+ required by the openssl "ca" command to work. The created config
+ file <dirname>/config works, but is meant as an example/template only.
+ If <dirname> is not specified, it defaults to rootCA, intermediateCA
+ or signingCA accordingly.
+
+Options:
+ -r, --root	 	Toplevel CA, trust anchor	
+ -i, --intermediate 	Subordinate CA that authorizes signing CAs in a tier3-hierarchy 
+ -s, --signing	 	CA that issues end user / client certificates ("leaf ca")
+ -f, --force		Force overwriting an existing directory structure
+ -n, --name <ca name>	Set the name of the CA to <ca name>, default is <dirname>
+EOF_INITCA_HELP
+  return 0
+}
+
+############################################################################
+
+initca_cmd() 
+{
+  local initca_opts ca_type force=0 initca_nopt_arg ca_subdir
+  local initca_optlist="fin:rs+force+intermediate+name:+signing+root"
+
+  # Subfunctions for uniform error messages
+  # Error: The CA type was specified more than one
+  type_specified_already() 
+  {
+    usage_error "CA type specified already, invalid option: <$initca_opts>"
+  }
+
+  # parse the command line for specific settings
+  while [ $OPTIND -le $argc ]; do
+
+    if getopts $initca_optlist initca_opts; then 
+
+      case "$initca_opts" in 
+  
+        # Force overwriting existing directory tree
+        f|force)
+          [ $force -eq 0 ] || more_than_once $initca_opts
+          force=1
+	  ;;
+
+        # sub CA, e.g. intermediate CA or subject CA
+	i|intermediate)
+	  [ -z ${ca_type+x} ] && ca_type="intermediate" || type_specified_already
+	  ;;
+
+        # root ca
+	r|root)
+          [ -z ${ca_type+x} ] && ca_type="root" || type_specified_already
+	  ;;
+
+	# signing ca
+	s|signing)
+          [ -z ${ca_type+x} ] && ca_type="signing" || type_specified_already
+	  ;;
+
+  	# Set the CA name
+  	n|name)
+	  [ -z "$ca_name" ] && ca_name="$OPTARG" || more_than_once $OPTARG 
+	  ;;
+          
+        # Missing argument, invalid option
+        ":") missing_argument "$OPTARG" ;;
+	"?") invalid_option ;; 
+
+      esac
+
+    # Not an option, so this must be our directory name
+    else
+      argv $OPTIND initca_nopt_arg
+      [ -z "$ca_dir" ] || usage_error "invalid argument on command line <$initca_nopt_arg>" 
+      ca_dir="$initca_nopt_arg"
+      OPTIND=$((OPTIND+1))
+    fi
+
+  done
+
+  # Check if a type was specified
+  [ -z ${ca_type+x} ] && usage_error "CA type not specified, cannot init CA"
+
+  # If no directory was given, a default is set
+  if [ -z "$ca_dir" ]; then
+    case "$ca_type" in
+      root) 
+        ca_dir="rootCA" ;;
+      intermediate) 
+        ca_dir="subCA" ;;
+      signing) 
+        ca_dir="signingCA" ;;
+    esac
+  fi
+    
+  # Strip a potential trailing "/"
+  ca_dir="${ca_dir%/}"
+
+  # If dirname starts with a "/" we consider it an absolute path,
+  # otherwise dirname is relative to cwd 
+  [ "${ca_dir#/}" = "$ca_dir" ] && ca_dir="${root_dir}/${ca_dir}"
+
+  # Check if a name was specified, else default to last part of ca_dir
+  [ -n "$ca_name" ] || ca_name="${ca_dir##*/}"
+
+  # Check if it's all valid characters
+  # Changed to use '!' for negation in the second character class as that's
+  # what's supported by dash, too
+  # Character constraints for CA names are taken from 
+  # https://www.openssl.org/docs/manmaster/apps/config.html
+  case "$ca_name" in 
+    *[[:blank:]]*)
+      runtime_error "whitespace not allowed in ca name: <$ca_name>" 
+      return 1
+      ;;
+    *[!.,\;_A-Za-z0-9]*) 
+      runtime_error "illegal character in CA name: <$ca_name>"
+      return 1
+      ;;
+    *) : ;;
+  esac
+
+  # Do not overwrite existing directories unless explicitly requested
+  if [ -d "$ca_dir" ]; then
+    if [ $force -eq 0 ]; then
+      runtime_error "directory <$ca_dir> already exists. Use -f to overwrite"
+      return 1
+    fi
+  else
+    if ! mkdir -p "$ca_dir" 2>/dev/null; then
+      runtime_error "failed to create directory <$ca_dir>, check directory permissions"
+      return 1
+    fi
+  fi
+
+  # Create ca directory tree 
+  for ca_subdir in private mgmt certs; do
+    mkdir -p $ca_dir/$ca_subdir
+  done
+  chmod 0700 $ca_dir/private
+
+  # Output the config file
+  write_conf $ca_type > $ca_dir/config
+
+  # Parse the config file 
+  parse_conf $ca_dir/config
+
+  # Initialize the database, filenames must match the config file !
+  > $ca_dir/mgmt/database
+  echo 01 > $ca_dir/mgmt/serial.crt
+  echo 01 > $ca_dir/mgmt/serial.crl
+  return 0
+}
+# Revoke a certificate request
+
+revoke_help()
+{
+      cat << EOF_REVOKE_HELP
+Usage: pki revoke [options] <file>
+  Revoke a certificate (crt)
+
+Options:
+ -c, --config <file>	Read configuration from <file> [default=./config]
+ -r, --reason <name>  	Reason why the certificate was revoked [default=unspecified]
+     		          Valid reasons are: unspecified, keyCompromise, CACompromise,
+           		  affiliationChanged, superseded, cessationOfOperation,
+                          certificateHold or removeFromCRL 
+EOF_REVOKE_HELP
+  return 0
+}
+
+revoke_cmd() 
+{
+  local revoke_opt crt reason revoke_nopt_arg
+  local optlist="c:r:+config:+reason:"
+
+  # parse the command line for specific settings
+  while [ $OPTIND -le $argc ]; do
+
+    if getopts $optlist revoke_opt; then 
+
+      case "$revoke_opt" in
+
+        # Specify the configuration file to use    
+        c|config) 
+          set_config "$OPTARG" 
+          ;;
+
+        # Provide the reason for revocation
+        r|reason)
+          [ -z ${reason+x} ] || more_than_one "$revoke_opt" 
+          reason="$OPTARG"
+          ;;
+
+        # Missing argument to option, invalid option
+        ":") missing_argument $OPTARG ;;
+        "?") invalid_option ;; 
+           
+      esac
+
+    # This command does not allow non-option arguments so far
+    else
+      argv $OPTIND revoke_nopt_arg 
+      if [ -z ${crt+x} ]; then
+        crt="$revoke_nopt_arg"
+        OPTIND=$((OPTIND+1))
+      else
+        usage_error "invalid argument on command line <$revoke_nopt_arg>" 
+      fi
+    fi
+  done
+
+  # If no filename was provided, what can we revoke ?!
+  [ -z ${crt+x} ] && usage_error "Certificate to revoke not specified"
+
+  # Set a default revocation reason if none was specified
+  [ -z ${reason+x} ] && reason="unspecified" 
+
+  # Check if we can read our input files (default config file is set globally)
+  for file in "$crt" "$config"; do
+    if ! is_readable "$file"; then
+      runtime_error "cannot read file: <$file>"
+      return 1
+    fi
+  done
+
+  # Output diagnostics: 
+  echo "Config:		<$config>"
+  echo "Certificate:	<$crt>"
+  echo "Reason: 	<${reason}>"
+  echo
+
+  # All options are set, now sign the certificate request
+  # We don't use run_openssl as we don't have an output file
+  revoke_cmd="ca -config $config -revoke $crt -crl_reason $reason"
+  openssl $revoke_cmd && return 0 || return 1
+}
+# Generate a certificate revocation list. A CA configuration file is required,
+# since obviously only those who issue certificates can revoke them.
+# Sometimes the default keyfile name is changed to something more meaningful
+# so it can be chosen via cmdline option -k | --keyfile
+
+crl_help() 
+{
+      cat << EOF_CRL_HELP
+Usage: pki crl [OPTION] <config file|directory>
+ Create a certificate revocation list(crl) from the information provided
+ in <config file>. If you specify a directory here, that directory must
+ have a ca configuration file named <config> 
+ (i.e. the directory was created using the "initca" command)
+
+Options:
+ -o, --outfile <file>	Write crl to <file> Use this option to override 
+	                  the default filename (see above)
+ -k, --keyfile <file>	Use <file> as private key to sign the crl
+EOF_CRL_HELP
+  return 0
+}
+
+##################################################################
+
+crl_cmd() 
+{
+  local crl_conf private_key key_opts outfile force=0 verify=0
+  local optlist="o:+outfile:+verify" crl_run_cmd crl_nopt_arg
+
+  # parse the command line for specific settings
+  while [ $OPTIND -le $argc ]; do
+
+    if getopts $optlist crl_opt; then 
+
+      case "$crl_opt" in
+
+        # The keyfile may be defined explicitly
+        k|keyfile)
+          [ -z ${private_key+x} ] || more_than_once "$crl_opt" 
+          private_key=$OPTARG
+          ;;
+
+        # Specify the output file
+        o|outfile)
+          [ -z ${outfile+x} ] || more_than_once "$crl_opt" 
+	  outfile="$OPTARG"
+          ;;
+
+        # Missing argument to option, invalid option
+        ":") missing_argument $OPTARG ;;
+        "?") invalid_option ;; 
+           
+      esac
+
+    # The non-option argument is the config file to use. Only one
+    # config file can be used.
+    else
+      argv crl_nopt_arg $OPTIND
+      if [ -z ${crl_conf+x} ]; then
+        crl_conf="$crl_nopt_arg" 
+        OPTIND=$((OPTIND+1))
+      else
+        usage_error "invalid argument on command line: <$crl_nopt_arg>" 
+      fi
+    fi
+
+  done
+
+  # No config file, no signing request
+  [ -z ${crl_conf+x} ] && usage_error "No config file to create a crl"
+    
+  # Set the config file 
+  set_config "$crl_conf" || return 1
+
+  # If a keyfile is provided, make sure we can read it
+  if [ -z ${private_key+x} ]; then
+    if ! is_readable $private_key; then
+      runtime_error "cannot read private key <$private_key>"
+      return 1
+    fi 
+  fi
+
+  # If "ca_name" and "ca_dir" are present in the config file, 
+  # it is considered a ca config file. Required file names are
+  # then created from the config file variables
+
+  if get_ca_from_config $crl_conf; then
+
+    [ -z ${outfile+x} ] && outfile="$ca_dir/$ca_name.crl"
+    [ -z ${private_key+x} ] && private_key="$ca_dir/private/$ca_name.key"
+
+  # If it's NOT a CA config file, that's an error
+  else
+    runtime_error "not a CA config file: <$crl_conf>"
+    return 1
+  fi
+
+  # We do not overwrite existing files, let the user delete it first
+  if [ -e "$outfile" ]; then
+    runtime_error "file already exists: <$OPTARG>"
+    return 1
+  fi
+
+  # Print some diagnostics
+  echo "Config file: 	<$crl_conf>"
+  echo "Private key:	<$private_key>"
+  echo "Output file: 	<$outfile>"
+  echo
+
+  # Create the CSR and write it to $outfile
+  crl_run_cmd="ca -gencrl -config $crl_conf ${keyopts+$keyopts}"
+  run_openssl "$outfile" "$crl_run_cmd" && return 0 | return 1
+}
+# This function generates a plain "old" rsa key in KEYFILE_NAME.
+# The key will be encrypted when the first optional argument is set to 1
+# If the key is encrypted, you can supply a second optional argument
+# which will be considered the passphrase to use for encryption 
+#
+# Usage: gen_rsa_key <KEYFILE_NAME> [0|1] [
+# Returns:
+# 0 on success
+# 1 on error
+
+gen_rsa_key() 
+{
+  local keyfile cipher_param pass_phrase
+
+  # Argument check
+  [ -z ${1+x} ] && debug "gen_rsa_key(): missing argument to function call"
+  keyfile=$1
+
+  # The encryption argument is optional, if nothing is specified we go
+  # with the openssl default
+  if ! [ -z ${2+x} ]; then
+
+    # If encryption is requested, we also check for a passphrase
+    if [ $2 -eq 1 ]; then
+      cipher_param="-aes-128-cbc"
+      [ -z ${3:+x} ] || pass_phrase="-pass pass:$3"
+    fi
+
+  fi
+
+  # Set parameters for run_openssl()
+  genkey_cmd="genpkey -algorithm rsa -pkeyopt rsa_keygen_bits:4096 \
+              ${cipher_param-} ${pass_phrase-}"
+
+  # Generate the key and return
+  run_openssl $keyfile $genkey_cmd && return 0 || return 1
+}
+
+# This function generates a key using elliptic curve cryptographic algorithms
+# 
+# https://blog.cloudflare.com/a-relatively-easy-to-understand-primer-on-elliptic-curve-cryptography/
+# tells us why elliptic curve cryptography is a good idea 
+#
+# See https://wiki.openssl.org/index.php/Elliptic_Curve_Cryptography#Named_Curves
+# for why it has to be "named_curve"
+#
+# See https://en.bitcoin.it/wiki/Secp256k1 for the choice of curve when the system supports it
+#
+# See https://msdn.microsoft.com/en-us/library/windows/desktop/bb204778%28v=vs.85%29.aspx
+# for the list of curves that the "Microsoft Cryptography Next Generation" (CNG) API supports:
+# prime256v1, secp384r1, and secp521r1
+#
+# Usage: gen_ecc_key <KEYFILE_NAME> <PRIME> [0|1] [passphrase]
+# Returns:
+# 0 on success
+# 1 on failure
+
+gen_ecc_key() 
+{
+  local keyfile curve cipher_param retval pass_phrase
+  
+  # Arg check
+  [ $# -lt 2 ] && debug "missing argument to function call: gen_ecc_key()"
+  keyfile=$1
+  curve=$2
+
+  # Encryption is an optional argument
+  if ! [ -z ${3+x} ]; then
+    # If encryption is requested, we also check for a passphrase
+    if [ $3 -eq 1 ]; then
+      cipher_param="-aes-128-cbc"
+      [ -z ${4:+x} ] || pass_phrase="-pass pass:$4"
+    fi
+  fi
+
+  # We generate parameters seperately 
+  curve_cmd="ecparam -name $curve -param_enc named_curve -genkey"
+  if run_openssl "${keyfile}.ecparam" "$curve_cmd"; then
+
+    # because only then we can choose to encrypt the key (or not)
+    genkey_cmd="genpkey -paramfile ${keyfile}.ecparam ${cipher_param-} ${pass_phrase-}"
+    if run_openssl $keyfile $genkey_cmd; then
+      rm ${keyfile}.ecparam
+      return 0
+    else
+      runtime_error "failed to generate key from ec parameters"
+      return 1
+    fi
+
+  else
+    runtime_error "failed to generate ec parameters for key"
+    return 1
+  fi
+}
+# Generate a pkcs12-file 
+
+p12_help()
+{
+      cat << EOF_PKCS12_HELP
+Usage: pki p12 [options] <file>
+  Create a pkcs12 container to export a certificate <file> with its
+  corresponding private key (plus an optional certificate chain of trust).
+ 
+Options:
+ -f, --force           An existing output file (see "outfile" below) is not over-
+	                 written by default. Use this option to enforce overwriting. 
+ -i, --include <file>  By default, no certificate chain is included. Use this
+   		         option to add a certificate (or many certificates bundled
+		         in a single file) to the pkcs12 container. To bundle 
+			 certificates in a file use the following command:
+                         "cat cert1 cert2 ... certX > bundle"
+ -k, --keyfile <file>  The default keyfile name is derived from the main input file.
+			 If this does not work, use -k to specify the keyfile name.
+ -o, --outfile <file>  Specify the output file [default="ca_name".p12]	
+		         Use this option if you want to explicitly specify
+		         the filename of the pkcs12 file that will be output.
+		         By default, the output filename will be derived from
+		         the config file basename.
+EOF_PKCS12_HELP
+  return 0
+}
+
+###################################################################################
+
+p12_cmd() 
+{
+  local basename certfile keyfile outfile include force=0
+  local p12_run_cmd p12_nopt_arg
+  local optlist="fi:k:o:+force+include:+keyfile:+outfile:"
+
+  # parse the command line for specific settings
+  while [ $OPTIND -le $argc ]; do
+
+    if getopts $optlist p12_opt; then 
+
+      case "$p12_opt" in
+
+        # Force overwriting existing files
+        f|force)
+          [ $force -eq 0 ] || more_than_once $p12_opt 
+          force=1
+          ;;
+
+        # Specify a file with certificates that should be included
+        i|include) 
+          [ -z ${include+x} ] || more_than_once $p12_opt 
+	  include="$OPTARG"
+          ;;
+
+        # Specify the keyfile, if the default does not work 
+        k|keyfile)
+          [ z ${keyfile+x} ] || more_than_once $OPTARG
+          keyfile="$OPTARG"
+          ;;
+
+        # Specify the output file
+        o|outfile)
+          [ -z ${outfile+x} ] || more_than_once $OPTARG
+	  outfile="$OPTARG"
+          ;;
+
+        # Missing argument to option, invalid option
+        ":") missing_argument $OPTARG ;;
+        "?") invalid_option ;; 
+           
+      esac
+
+    # This command does not allow non-option arguments so far
+    else
+      argv $OPTIND p12_nopt_arg
+      if [ -z ${certfile+x} ]; then
+        certfile="$p12_nopt_arg"
+        OPTIND=$((OPTIND+1))
+      else
+        usage_error "invalid argument on command line <$p12_nopt_arg>" 
+      fi
+    fi
+  done
+
+  # You want a SafeBag (pkcs12 container) ? Give me some input...
+  [ -z ${certfile+x} ] && usage_error "Certificate file not specified"
+
+  # Derive filenames if necessary
+  basename=${certfile%.*}
+  [ -z ${keyfile+x} ] && keyfile=${basename}.key
+
+  # check if files are readable
+  for file in "${include-}" "${keyfile-}"; do
+    if ! is_readable "$file"; then
+      runtime_error "cannot read <$file>"
+      return 1
+    fi
+  done
+
+  # The outfile will be placed in the current directory, NOT in the
+  # absolute directory of the certificate
+  [ -z ${outfile+x} ] && outfile="${basename##*/}.p12"
+  
+  # Are you sure to overwrite existing files ?
+  if [ -e $outfile ]; then
+    if ! [ $force -eq 1 ]; then
+      runtime_error 'file exists: <$outfile> Use "-f" to overwrite'
+      return 1
+    fi
+  fi
+
+  # Output diagnostics: 
+  echo "Certificate:	    <$certfile>"
+  echo "Keyfile:	    <$keyfile>"
+  echo "Included certs in:  <${include--}>"
+  echo "Output file: 	    <$outfile>"
+  echo
+
+  # All options are set, now pack the pkcs12 container 
+  p12_run_cmd="pkcs12 -export -in $certfile -inkey $keyfile ${include+-certfile $include}"
+  run_openssl $outfile $p12_run_cmd && return 0 || return 1
+}
+# Generate a pkcs12-file 
+ext() 
+{
+  local configfile
+#  local ext_optlist="fi:k:o:+force+include:+keyfile:+outfile:"
+
+ # # parse the command line for specific settings
+ # while [ $OPTIND -le $argc ]; do
+
+ #   if getopts $optlist p12_opt; then 
+
+ #     case "$p12_opt" in
+
+ #       # Force overwriting existing files
+ #       f|force)
+ #         [ $force -eq 0 ] || more_than_once $OPTARG
+ #         force=1
+ #         ;;
+
+ #       # Missing argument to option, invalid option
+ #       ":") missing_argument $OPTARG ;;
+ #       "?") invalid_option ;; 
+ #          
+ #     esac
+
+ #   # This command does not allow non-option arguments so far
+ #   else
+ #     if [ -z ${certfile+x} ]; then
+ #       certfile=$(argv $OPTIND)
+ #       OPTIND=$((OPTIND+1))
+ #     else
+ #       usage_error "invalid argument ..." 
+ #     fi
+ #   fi
+ # done
+
+ # If a directory was given, assume there's a config file in that 
+ # directory
+ configfile=$(argv 1)
+ if [ -d $configfile ]; then 
+   configfile="${configfile}/config"
+ fi
+
+ egrep "^ *\[.*ext.*\]" "$configfile"
+
+ return 0
+
+}
+# help.sh
+#
+# Since the pki script is a little complex, we provide help on individual commands 
+# Instead of putting all the help texts in here, we leave them with the actual 
+# subcommand source as this way it's easier to correct the help texts when 
+# a command's parameters change etc.
+ 
+help_cmd() 
+{
+  # Argument check  
+  [ -z ${1+x} ] && debug "missing argument to function call help_cmd()"
+
+  # Call the subcommand's help routine
+  case "$1" in 
+    initca) initca_help ;;
+
+    req) req_help ;;
+
+    selfsign) selfsign_help ;;
+
+    sign) sign_help ;;
+
+    eap-tls) eap_tls_help ;;
+  
+    tls|ipsec) tls_ipsec_help ;;
+
+    revoke) revoke_help ;;
+
+    crl) crl_help ;;
+
+    p12) p12_help ;;
+
+    *) usage_error "unknown command: <$help_for_cmd>" ;;
+  esac
+} 
+
+# End of file help.sh
+# main.sh
+#
+
+###############################################################################################
+
+# The config file is reused throughout sub commands so we unify the procedure here.
+# This function sets the global "$config" variable to the config file name.
+# If the argument provided is a directory, a default config file named "config" in
+# that directory is expected. 
+#
+# Usage: set_config <directory|filename>
+# Returns: 
+# 0 if config file was found and is_readable
+# 1 otherwise
+
+set_config() 
+{
+  local config_candidate
+
+  # argument check
+  [ -z ${1+x} ] && debug "missing argument to function call: set_config()"
+
+  # are we set already ?
+  if [ $config_set -eq 1 ]; then
+    usage_error "config file already set to <$config>"  
+    return 1
+  fi
+  
+  # Adjust candidate filename if we were given a directory 
+  [ -d "$1" ] && config_candidate="${1%/}/config" || config_candidate="$1"
+ 
+  # If we can't read it, we fail
+  if ! is_readable "$config_candidate"; then
+    runtime_error "cannot read config file: <$config_candidate>"
+    return 1
+
+  # or set the global variables
+  else
+    config_set=1
+    config="$config_candidate"
+    return 0
+  fi
+} 
+
+# Get ca data from the config file and set the global variables
+# ca and ca_dir accordingly
+
+# Usage: get_ca_from_config <CONFIG FILE>
+get_ca_from_config() 
+{
+  local ca_config_file
+
+  # Argument check
+  [ -z ${1+x} ] && debug "get_ca_from_config(): missing argument to function call"
+
+  # Before we proceed, make sure we can read the config file
+  is_readable "$1" && ca_config_file="$1" || return 1
+
+  # Get ca name from the config file
+  ca_name=$(awk '/^ca_name / { print $3 }' $ca_config_file)
+  [ -z "$ca_name" ] && return 1
+
+  # Get ca dir from the config file
+  ca_dir=$(awk '/^ca_dir/ { print $3 }' $ca_config_file)
+  [ -z "$ca_dir" ] && return 1 
+
+  return 0
+}
+
+###############################################################################################
+
+# Openssl every now and then leaves stale output files of zero length behind,
+# when interrupted (CTRL-C) or when it fails (e.g. wrong password)
+# To avoid having empty / stale output files, we use the -outfile option with
+# openssl whenever an output file is required and only on successful return
+# of the relevant openssl command the $tmpfile is moved to the actual output file.
+# This exit hook removes an existing tmpfile
+
+pki_exit_hook() 
+{
+  [ -z "$tmpfile" ] || rm -f $tmpfile
+  return 0
+}
+
+###############################################################################################
+
+# This function is used to run openssl commands and takes care of the 
+# aforementioned $tmpfile / $outfile
+# Usage: <outfile> <cmd ...>
+run_openssl() 
+{
+  local openssl_outfile openssl_cmd size openssl_redirect
+
+  # Argument check
+  [ $# -lt 2 ] && debug "Missing argument to run_openssl() function call"
+
+  # Parse arguments
+  openssl_outfile="$1"
+  shift 1 
+  openssl_cmd="$@"
+
+  # Execute the openssl command
+  if openssl $openssl_cmd -out $tmpfile; then
+
+    # openssl seems to return 0 even when it failed, e.g. when creating a key
+    # fails because an empty passphrase was provided
+    # So we stat $tmpfile and if it's empty we failed
+
+    if [ -e "$tmpfile" ]; then
+      size=$(stat -c "%s" $tmpfile)
+      if [ $size -gt 0 ]; then
+        mv $tmpfile $openssl_outfile
+        return 0
+      fi
+    fi
+
+  fi
+
+  # Unfortunately, we failed
+  rm -f $tmpfile
+  return 1
+}
+
+###############################################################################################
+
+# Global variables
+tmpfile=".tmpfile.pki_$$"
+ca_name=""
+ca_dir=""
+
+# Default configuration file is assumed to be in the current directory
+config="./config"
+config_set=0
+
+# root directory is the current working directory
+root_dir=$(pwd)
+
+# Main function, obviously
+main() 
+{
+  local help_for_cmd
+
+  # Install our own exit handler
+  set_exit_hook pki_exit_hook 
+
+  # If a command was given without the required arguments, we 
+  # generously print the help for the command
+  case $cmd in
+    initca|req|selfsign|sign|view|tls|ipsec|eap-tls|revoke|clr|p12|ext)
+      [ $argc -eq 0 ] && { help_cmd $cmd; return 1; } ;; 
+  esac
+
+  # Check whether a valid command was given and 
+  # call the subroutines 
+  case $cmd in
+  
+    # Initialize a CA and it's directory structure
+    # Type of CA is the required minimum of arguments
+    initca) 
+      initca_cmd || { runtime_error "Initializing the CA failed"; return 1; }
+      ;;
+  
+    # Generate a certificate signing request
+    req)
+      req_cmd || { runtime_error "Creating a certificate signing request failed"; return 1; }
+      ;;
+  
+    # Selfsign a certificate signing request
+    selfsign)
+      selfsign_cmd || { runtime_error "Selfsigning the csr failed"; return 1; }
+      ;;
+  
+    # Sign a certificate request, at least the csr file is required as
+    # an argument
+    sign)
+      sign_cmd || { runtime_error "Signing a certificate failed"; return 1; }
+      ;;
+  
+    # View a certificate request | certificate | ...
+    # Requires the file to view as an argument
+    view) view_cmd || return 1 ;;
+  
+    # Create a certificate request for a TLS/IPSEC server, at least
+    # a (file)name has to be provided
+    tls|ipsec) tls_ipsec_cmd || return 1 ;; 
+  
+    # Create a certificate request for a EAP-TLS Certificate, same as 
+    # for tls / ipsec
+    eap-tls) eap_tls_cmd || return 1 ;; 
+  
+    # Revoke a certificate 
+    revoke) revoke_cmd || return 1 ;; 
+  
+    # Generate a certificate revocation list for a ca 
+    crl) crl_cmd || return 1 ;; 
+  
+    # Generate a pkcs12 container
+    p12) p12_cmd || return 1 ;;
+  
+    # Get detailed help on individual commands
+    help)
+      argv 1 help_for_cmd || usage_error "Help for what ?" 
+      help_cmd "$help_for_cmd"
+      ;;
+
+    # Show extensions present in a config file
+    ext) ext_cmd || return 1
+      ;; 
+     
+  esac
+}
+
+####################################################
+
+# Call the main loop. All subcommands are expected to properly return 0
+# on success and 1 on failure so that we can exit with an overall return
+# value of 0 or 1 respectively from here.
+
+if main; then
+  exit 0
+else
+  exit 1
+fi
+
+# End of file main.sh
